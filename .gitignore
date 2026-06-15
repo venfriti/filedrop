@@ -1,0 +1,23 @@
+# Compiled binary
+filedrop.exe
+*.exe
+
+# Config contains password hash and secret key — never commit
+config.json
+
+# Logs
+*.log
+
+# Go test artifacts
+*.test
+*.out
+
+# Go build cache
+/vendor/
+
+# OS
+Thumbs.db
+desktop.ini
+
+# Editor backup files
+*~
