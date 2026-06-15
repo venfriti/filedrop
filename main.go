@@ -179,7 +179,7 @@ var loginTmpl = template.Must(template.New("login").Parse(`<!DOCTYPE html>
 <meta charset="UTF-8">
 <meta name="viewport" content="width=device-width,initial-scale=1">
 <title>FileDrop</title>
-<link rel="icon" href="/favicon.svg" type="image/svg+xml"><link rel="icon" href="/favicon.png" type="image/png">
+<link rel="icon" href="/favicon.svg" type="image/svg+xml"><link rel="icon" href="/favicon.png" type="image/png"><link rel="apple-touch-icon" href="/apple-touch-icon.png">
 <link rel="preconnect" href="https://fonts.googleapis.com">
 <link href="https://fonts.googleapis.com/css2?family=Libre+Baskerville:ital,wght@0,400;0,700;1,400&family=IBM+Plex+Mono:wght@300;400;500&display=swap" rel="stylesheet">
 <style>
@@ -220,7 +220,7 @@ var uploadTmpl = template.Must(template.New("upload").Parse(`<!DOCTYPE html>
 <meta charset="UTF-8">
 <meta name="viewport" content="width=device-width,initial-scale=1">
 <title>FileDrop</title>
-<link rel="icon" href="/favicon.svg" type="image/svg+xml"><link rel="icon" href="/favicon.png" type="image/png">
+<link rel="icon" href="/favicon.svg" type="image/svg+xml"><link rel="icon" href="/favicon.png" type="image/png"><link rel="apple-touch-icon" href="/apple-touch-icon.png">
 <link rel="preconnect" href="https://fonts.googleapis.com">
 <link href="https://fonts.googleapis.com/css2?family=Libre+Baskerville:ital,wght@0,400;0,700;1,400&family=IBM+Plex+Mono:wght@300;400;500&display=swap" rel="stylesheet">
 <style>
@@ -830,37 +830,44 @@ setInterval(loadFiles, 5000);
 // ─── Handlers ─────────────────────────────────────────────────────────────────
 
 var faviconPNG []byte
+var appleTouchPNG []byte
 
-func init() {
-	img := image.NewRGBA(image.Rect(0, 0, 32, 32))
-	bg := color.RGBA{17, 15, 13, 255}
+func buildIcon(sz int) []byte {
+	img := image.NewRGBA(image.Rect(0, 0, sz, sz))
+	bg   := color.RGBA{17, 15, 13, 255}
 	gold := color.RGBA{154, 125, 74, 255}
-	for y := 0; y < 32; y++ {
-		for x := 0; x < 32; x++ {
+	for y := 0; y < sz; y++ {
+		for x := 0; x < sz; x++ {
 			img.Set(x, y, bg)
 		}
 	}
-	// arrow stem
-	for y := 4; y < 20; y++ {
-		for x := 14; x < 18; x++ {
-			img.Set(x, y, gold)
+	fill := func(x, y, w, h int) {
+		for row := y; row < y+h; row++ {
+			for col := x; col < x+w; col++ {
+				if col >= 0 && col < sz && row >= 0 && row < sz {
+					img.Set(col, row, gold)
+				}
+			}
 		}
 	}
-	// arrowhead (widest at top, pointing down)
+	// Scale all coordinates relative to sz
+	s := func(v int) int { return v * sz / 32 }
+	// Stem
+	fill(s(14), s(4), s(4), s(16))
+	// Arrowhead tiers
 	for i, a := range [][2]int{{8, 24}, {10, 22}, {12, 20}, {14, 18}} {
-		for x := a[0]; x < a[1]; x++ {
-			img.Set(x, 20+i, gold)
-		}
+		fill(s(a[0]), s(20)+i*(sz/32), s(a[1]-a[0]), sz/32)
 	}
-	// tray base
-	for y := 27; y < 29; y++ {
-		for x := 5; x < 27; x++ {
-			img.Set(x, y, gold)
-		}
-	}
+	// Tray
+	fill(s(5), s(27), s(22), s(2))
 	var buf bytes.Buffer
 	png.Encode(&buf, img)
-	faviconPNG = buf.Bytes()
+	return buf.Bytes()
+}
+
+func init() {
+	faviconPNG   = buildIcon(32)
+	appleTouchPNG = buildIcon(180)
 }
 
 func handleFavicon(w http.ResponseWriter, r *http.Request) {
@@ -873,6 +880,12 @@ func handleFaviconPNG(w http.ResponseWriter, r *http.Request) {
 	w.Header().Set("Content-Type", "image/png")
 	w.Header().Set("Cache-Control", "public, max-age=86400")
 	w.Write(faviconPNG)
+}
+
+func handleAppleTouchIcon(w http.ResponseWriter, r *http.Request) {
+	w.Header().Set("Content-Type", "image/png")
+	w.Header().Set("Cache-Control", "public, max-age=86400")
+	w.Write(appleTouchPNG)
 }
 
 func handleLogin(w http.ResponseWriter, r *http.Request) {
@@ -1287,6 +1300,8 @@ func buildServer() *http.Server {
 	mux.HandleFunc("/favicon.svg", handleFavicon)
 	mux.HandleFunc("/favicon.png", handleFaviconPNG)
 	mux.HandleFunc("/favicon.ico", handleFaviconPNG)
+	mux.HandleFunc("/apple-touch-icon.png", handleAppleTouchIcon)
+	mux.HandleFunc("/apple-touch-icon-precomposed.png", handleAppleTouchIcon)
 	mux.HandleFunc("/login", handleLogin)
 	mux.HandleFunc("/upload", handleUpload)
 	mux.HandleFunc("/files", handleFiles)
