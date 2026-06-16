@@ -2,6 +2,11 @@
 filedrop.exe
 *.exe
 
+# TLS certificates — never commit
+*.pem
+*.key
+*.crt
+
 # Config contains password hash and secret key — never commit
 config.json
 
