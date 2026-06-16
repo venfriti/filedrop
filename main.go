@@ -25,7 +25,9 @@ import (
 	"syscall"
 	"time"
 
+	qrcode "github.com/skip2/go-qrcode"
 	"golang.org/x/crypto/bcrypt"
+	"golang.org/x/sys/windows"
 	"golang.org/x/sys/windows/svc"
 	"golang.org/x/sys/windows/svc/mgr"
 	"golang.org/x/term"
@@ -62,7 +64,8 @@ type Config struct {
 	Secret        string `json:"secret"`
 	UploadDir     string `json:"upload_dir"`
 	Port          int    `json:"port"`
-	SessionCookie string `json:"session_cookie,omitempty"` // persisted for CLI send command
+	ExportDir     string `json:"export_dir,omitempty"`
+	SessionCookie string `json:"session_cookie,omitempty"`
 }
 
 var (
@@ -228,11 +231,11 @@ var uploadTmpl = template.Must(template.New("upload").Parse(`<!DOCTYPE html>
 
 /* ── Dark (default) ── */
 :root{
-  --bg:#110f0d;--surface:#181511;--card:#1c1915;
-  --text:#d4cfc8;--muted:#5a554e;--faint:#2a2721;
-  --rule:#221f1b;--gold:#9a7d4a;--gold-dim:#3d3020;
-  --note-bg:#1a1812;--note-border:#2e2a22;
-  --copy-ok:#6b8c6b
+  --bg:#100e0b;--surface:#1a1714;--card:#1e1b16;
+  --text:#e8ddc8;--muted:#9a8e7a;--faint:#2a2420;
+  --rule:#3a3428;--gold:#c8922a;--gold-dim:#5a4420;
+  --note-bg:#1e1b16;--note-border:#3a3428;
+  --copy-ok:#4a8a4a
 }
 
 /* ── Light ── */
@@ -254,10 +257,14 @@ header{display:flex;justify-content:space-between;align-items:center;padding:1.7
 .header-meta{display:flex;align-items:center;gap:.875rem;flex-wrap:wrap}
 .pill{font-family:'IBM Plex Mono',monospace;font-size:.72rem;font-weight:500;letter-spacing:.06em;color:var(--muted);border:1px solid var(--faint);padding:.3rem .8rem;border-radius:999px;white-space:nowrap}
 .pill.active{color:var(--gold);border-color:var(--gold-dim)}
-
-/* theme toggle */
 .theme-btn{background:none;border:1px solid var(--faint);color:var(--muted);font-family:'IBM Plex Mono',monospace;font-size:.72rem;font-weight:500;letter-spacing:.06em;padding:.3rem .8rem;border-radius:999px;cursor:pointer;white-space:nowrap;transition:color .15s,border-color .15s}
 .theme-btn:hover{color:var(--text);border-color:var(--rule)}
+.hdr-mobile-meta{display:none;align-items:center;gap:.5rem}
+.session-pill{font-family:'IBM Plex Mono',monospace;font-size:.72rem;font-weight:500;letter-spacing:.06em;color:var(--muted);border:1px solid var(--faint);padding:.2rem .5rem;border-radius:999px;white-space:nowrap}
+.hdr-icons{display:flex;align-items:center;gap:.05rem}
+.hdr-icon-btn{background:none;border:none;color:var(--muted);font-size:1.6rem;cursor:pointer;padding:.1rem .3rem;line-height:1;display:flex;align-items:center;transition:color .15s;font-family:system-ui,-apple-system,sans-serif}
+.hdr-icon-btn:hover{color:var(--text)}
+.hdr-connected{font-size:1.6rem;color:#4caf50;padding:.1rem .3rem;line-height:1;display:flex;align-items:center;font-family:system-ui,-apple-system,sans-serif}
 
 .upload-section{padding:2.5rem 0 1.5rem}
 .drop-card{background:var(--surface);border:1px solid var(--rule);border-radius:6px;padding:3rem 2rem;text-align:center;cursor:pointer;transition:border-color .2s,background .2s}
@@ -266,6 +273,16 @@ header{display:flex;justify-content:space-between;align-items:center;padding:1.7
 .drop-label{font-size:1.2rem;font-weight:400;font-style:italic;color:var(--text);margin-bottom:.4rem}
 .drop-sub{font-family:'IBM Plex Mono',monospace;font-size:.75rem;font-weight:500;letter-spacing:.07em;color:var(--muted)}
 #file-input{display:none}
+
+/* compact upload row (mobile) */
+.upload-compact{display:none;align-items:center;gap:1rem;padding:.875rem 1.25rem;background:var(--surface);border:1px solid var(--rule);border-radius:6px;cursor:pointer;transition:border-color .2s,background .2s}
+.upload-compact:active{background:var(--card)}
+.uc-icon{width:42px;height:42px;background:var(--card);border:1px solid var(--faint);border-radius:6px;display:flex;align-items:center;justify-content:center;font-size:1.1rem;color:var(--muted);flex-shrink:0}
+.uc-text{flex:1;min-width:0}
+.uc-title{font-size:.95rem;font-weight:400;font-style:italic;color:var(--text);font-family:'Libre Baskerville',Georgia,serif}
+.uc-sub{font-family:'IBM Plex Mono',monospace;font-size:.68rem;font-weight:500;letter-spacing:.05em;color:var(--muted);margin-top:.15rem}
+.uc-chevron{color:var(--muted);font-size:1.1rem;flex-shrink:0}
+.note-btns{display:flex;gap:.5rem;flex-shrink:0}
 
 /* progress */
 #progress-wrap{display:none;margin:1.25rem 0 0}
@@ -278,10 +295,11 @@ header{display:flex;justify-content:space-between;align-items:center;padding:1.7
 
 /* note input */
 .note-wrap{margin-top:1rem}
-.note-field{width:100%;background:var(--surface);border:1px solid var(--rule);border-radius:6px;padding:1rem 1.25rem;display:flex;gap:.75rem;align-items:flex-end}
-#note-input{flex:1;background:none;border:none;outline:none;resize:none;font-family:'Libre Baskerville',Georgia,serif;font-size:.95rem;color:var(--text);line-height:1.6;min-height:2.4rem;max-height:10rem;overflow-y:auto}
+.note-field{width:100%;background:var(--note-bg);border:1px solid var(--note-border);border-radius:6px;padding:1rem 1.25rem;display:flex;gap:.75rem;align-items:flex-end}
+#note-input{flex:1;background:none;border:none;outline:none;resize:none;font-family:'Libre Baskerville',Georgia,serif;font-size:.95rem;color:var(--text);line-height:1.6;min-height:2.4rem;max-height:10rem;overflow-y:auto;padding:0}
 #note-input::placeholder{color:var(--muted);font-style:italic}
-#paste-btn,#note-submit{background:none;border:1px solid var(--faint);color:var(--muted);font-family:'IBM Plex Mono',monospace;font-size:.72rem;font-weight:500;letter-spacing:.06em;padding:.4rem .9rem;border-radius:4px;cursor:pointer;white-space:nowrap;flex-shrink:0;transition:color .15s,border-color .15s;align-self:flex-end}
+.note-divider{display:none;height:1px;background:var(--rule)}
+#paste-btn,#note-submit{background:none;border:1px solid var(--faint);color:var(--muted);font-family:'IBM Plex Mono',monospace;font-size:.72rem;font-weight:500;letter-spacing:.06em;padding:.4rem .9rem;border-radius:4px;cursor:pointer;white-space:nowrap;flex-shrink:0;transition:color .15s,border-color .15s}
 #note-submit:hover{color:var(--gold);border-color:var(--gold-dim)}
 
 /* divider */
@@ -300,18 +318,18 @@ header{display:flex;justify-content:space-between;align-items:center;padding:1.7
 
 /* file/note list */
 .file-list{display:flex;flex-direction:column}
-.file-item{display:grid;grid-template-columns:52px 1fr auto auto auto auto;align-items:center;gap:1.25rem;padding:1rem;border-radius:5px;transition:background .15s;margin:0 -1rem}
+
 .file-item:hover{background:var(--surface)}
-.file-item+.file-item{border-top:1px solid var(--rule)}
+.file-item+.file-item{border-top:1px solid var(--faint)}
 
 /* note item overrides — no thumb column, spans full row */
-.note-item{display:grid;grid-template-columns:1fr auto auto;align-items:center;gap:1.25rem;padding:1rem 1.25rem;border-radius:5px;background:var(--note-bg);border:1px solid var(--note-border);margin:.25rem 0;transition:background .15s}
+.note-item{display:grid;grid-template-columns:1fr auto auto;align-items:center;gap:1.25rem;padding:1rem 1.25rem;border-radius:5px;background:var(--note-bg);border:1px solid var(--note-border);margin:.25rem 0;transition:background .15s;position:relative}
 .note-item:hover{background:var(--card)}
 .note-snippet{font-family:'Libre Baskerville',Georgia,serif;font-size:.95rem;color:var(--text);line-height:1.5;word-break:break-word}
 .note-meta{font-family:'IBM Plex Mono',monospace;font-size:.68rem;font-weight:500;color:var(--muted);margin-top:.2rem;letter-spacing:.04em}
 .note-actions{display:flex;align-items:center;gap:.5rem;flex-shrink:0}
 
-.file-thumb{width:44px;height:44px;border-radius:4px;border:1px solid var(--rule);flex-shrink:0;display:flex;align-items:center;justify-content:center;overflow:hidden}
+.file-thumb{width:50px;height:50px;border-radius:5px;border:1px solid var(--faint);flex-shrink:0;display:flex;align-items:center;justify-content:center;overflow:hidden}
 .file-thumb img{width:100%;height:100%;object-fit:cover;display:block}
 .ft-pdf{background:var(--card);font-family:'IBM Plex Mono',monospace;font-size:.65rem;font-weight:500;letter-spacing:.06em;color:#6b5c3e;border-color:var(--faint)}
 .ft-vid{background:var(--card);font-family:'IBM Plex Mono',monospace;font-size:.65rem;font-weight:500;letter-spacing:.06em;color:#5a4e6b;border-color:var(--faint)}
@@ -325,20 +343,88 @@ header{display:flex;justify-content:space-between;align-items:center;padding:1.7
 .file-name-ext{color:var(--muted)}
 .file-type-date{font-family:'IBM Plex Mono',monospace;font-size:.72rem;font-weight:500;letter-spacing:.04em;color:var(--muted);margin-top:.2rem}
 .file-size{font-family:'IBM Plex Mono',monospace;font-size:.8rem;font-weight:400;color:var(--muted);white-space:nowrap;min-width:58px;text-align:right;opacity:.6}
-.file-sep{width:1px;height:24px;background:var(--rule);flex-shrink:0}
-
-.view-btn,.dl-btn,.copy-btn{background:none;border:none;padding:.4rem .3rem;cursor:pointer;font-family:'IBM Plex Mono',monospace;font-size:.78rem;font-weight:500;letter-spacing:.05em;white-space:nowrap;transition:color .15s}
-.view-btn{color:var(--muted)}.view-btn:hover{color:var(--text)}
-.view-btn:disabled{opacity:.28;cursor:default}
+.file-item{display:grid;grid-template-columns:52px 1fr auto;align-items:center;gap:1.25rem;padding:1rem;border-radius:5px;transition:background .15s;margin:0 -1rem;position:relative}
+.dir-item{grid-template-columns:52px 1fr auto}
+.file-actions{display:flex;align-items:center;gap:.4rem}
+.action-sep{width:1px;height:1rem;background:var(--rule);flex-shrink:0;margin:0 .15rem}
+.view-btn,.dl-btn,.copy-btn,.export-btn,.menu-btn{background:none;border:none;padding:.25rem .15rem;cursor:pointer;font-family:'IBM Plex Mono',monospace;font-size:1.05rem;font-weight:500;letter-spacing:.05em;white-space:nowrap;transition:color .15s}
+.view-btn{color:var(--muted);font-size:.82rem}.view-btn:hover{color:var(--text)}
 .dl-btn{color:var(--muted)}.dl-btn:hover{color:var(--gold)}
+.export-btn{color:var(--muted)}.export-btn:hover{color:var(--gold)}
+.export-btn:disabled{opacity:0;cursor:default;pointer-events:none}
 .copy-btn{color:var(--muted)}.copy-btn:hover{color:var(--text)}
 .copy-btn.copied{color:var(--copy-ok)}
+.menu-btn{display:none;color:var(--muted);font-size:1.1rem;padding:.2rem .5rem;letter-spacing:0;line-height:1}
+.menu-btn:hover{color:var(--text)}
+
+.folder-row{display:flex;align-items:center;gap:.75rem;margin-bottom:.75rem;justify-content:space-between}
+.folder-left{display:flex;align-items:center;gap:.75rem;flex:1;min-width:0}
+.btn-lbl{font-size:.68rem;letter-spacing:.04em}
+
+#disk-bar-wrap{display:flex;align-items:center;gap:.6rem}
+#disk-bar-track{width:80px;height:3px;background:var(--faint);border-radius:2px;overflow:hidden}
+#disk-bar-fill{height:100%;background:var(--gold);border-radius:2px;transition:width .3s}
+#disk-label{font-family:'IBM Plex Mono',monospace;font-size:.68rem;color:var(--muted)}
 
 .empty-state{padding:2rem 1rem;font-family:'IBM Plex Mono',monospace;font-size:.75rem;font-weight:500;color:var(--muted);letter-spacing:.06em;text-align:center}
 
 footer{padding:1.75rem 0;border-top:1px solid var(--rule);margin-top:2rem;display:flex;justify-content:space-between;align-items:center;gap:1rem}
 .ft-l{font-family:'IBM Plex Mono',monospace;font-size:.7rem;font-weight:500;letter-spacing:.07em;color:var(--muted)}
 .ft-r{font-family:'IBM Plex Mono',monospace;font-size:.7rem;letter-spacing:.05em;color:var(--muted);opacity:.5;word-break:break-all}
+
+/* search */
+.search-wrap{margin-top:1rem}
+.search-field{display:flex;align-items:center;background:var(--surface);border:1px solid var(--rule);border-radius:6px;padding:.5rem 1rem;gap:.5rem}
+.search-icon{color:var(--muted);font-size:.9rem;flex-shrink:0}
+#search-input{flex:1;background:none;border:none;outline:none;font-family:'IBM Plex Mono',monospace;font-size:.82rem;color:var(--text);min-width:0}
+#search-input::placeholder{color:var(--muted)}
+#search-clear{background:none;border:none;color:var(--muted);cursor:pointer;font-size:1rem;padding:0 .25rem;line-height:1;flex-shrink:0;transition:color .15s}
+#search-clear:hover{color:var(--text)}
+.search-snippet{font-family:'IBM Plex Mono',monospace;font-size:.7rem;color:var(--muted);margin-top:.2rem;white-space:nowrap;overflow:hidden;text-overflow:ellipsis;max-width:100%;opacity:.8}
+
+/* ⋮ row menu */
+.row-menu{position:absolute;right:0;top:calc(100% + 2px);z-index:50;background:var(--card);border:1px solid var(--faint);border-radius:6px;min-width:150px;overflow:hidden;box-shadow:0 4px 16px rgba(0,0,0,.35)}
+.row-menu-item{display:flex;align-items:center;gap:.6rem;padding:.65rem 1rem;font-family:'IBM Plex Mono',monospace;font-size:.78rem;font-weight:500;color:var(--muted);cursor:pointer;white-space:nowrap;background:none;border:none;width:100%;text-align:left;transition:background .1s,color .1s}
+.row-menu-item:hover{background:var(--faint);color:var(--text)}
+
+/* bulk delete */
+.row-check{display:flex;align-items:center;justify-content:center}
+.row-check input[type=checkbox]{width:15px;height:15px;accent-color:var(--gold);cursor:pointer;flex-shrink:0}
+#select-trigger{display:none;color:#9a5a4a;background:none;border:none;cursor:pointer;padding:.1rem .15rem;line-height:1;margin-left:auto;transition:color .15s}
+#select-trigger:hover{color:#c06050}
+#select-bar{display:none;position:fixed;bottom:0;left:0;right:0;z-index:60;background:var(--surface);border-top:1px solid var(--rule);padding:.875rem 2rem;align-items:center;justify-content:space-between;gap:1rem}
+#select-bar-count{font-family:'IBM Plex Mono',monospace;font-size:.78rem;font-weight:500;color:var(--muted);letter-spacing:.04em}
+#select-bar-actions{display:flex;gap:.75rem}
+
+/* desktop: show Delete trigger + select mode grids */
+@media (min-width:641px){
+  #select-trigger{display:flex;align-items:center}
+  .file-list.selecting .file-item:not(.dir-item){grid-template-columns:20px 52px 1fr auto}
+  .file-list.selecting .dir-item{grid-template-columns:20px 52px 1fr auto}
+  .file-list.selecting .note-item{grid-template-columns:20px 1fr auto auto}
+}
+
+/* mobile: ⋮ only */
+@media (max-width:640px){
+  .file-item,.dir-item{grid-template-columns:52px 1fr auto!important}
+  .note-item{grid-template-columns:1fr auto!important}
+  .view-btn,.dl-btn,.export-btn,.note-actions,.action-sep{display:none!important}
+  .menu-btn{display:flex!important;align-items:center}
+  #hdr-desktop{display:none!important}
+  .hdr-mobile-meta{display:flex!important}
+  #select-trigger{display:none!important}
+  .drop-card{display:none}
+  .upload-compact{display:flex;border-radius:12px}
+  .uc-icon{border-radius:8px}
+  .upload-section{padding:1.25rem 0 1rem}
+  .note-field{flex-direction:column;align-items:stretch;gap:0;padding:0;border-radius:12px}
+  #note-input{padding:14px 16px 10px;min-height:4.5rem;max-height:8rem}
+  .note-divider{display:block}
+  .note-btns{align-self:stretch;padding:10px 12px;gap:8px}
+  #paste-btn{flex:1;text-align:center;padding:.6rem 0;border-radius:8px}
+  #note-submit{flex:1;text-align:center;padding:.6rem 0;border-radius:8px;background:#9a7d4a;color:#100e0b;border:none;font-weight:500}
+  #note-submit:hover{color:var(--bg);border-color:transparent}
+}
 
 /* modal */
 #modal{display:none;position:fixed;inset:0;background:rgba(0,0,0,.75);z-index:100;align-items:center;justify-content:center;padding:1.5rem}
@@ -365,11 +451,20 @@ footer{padding:1.75rem 0;border-top:1px solid var(--rule);margin-top:2rem;displa
 <div class="shell">
   <header>
     <div class="wordmark">File<span>Drop</span></div>
-    <div class="header-meta">
+    <div class="header-meta" id="hdr-desktop">
       <span class="pill active">&#x25CF; Connected</span>
       <span class="pill">:{{.Port}}</span>
       <span class="pill">Session {{.SessionHours}}h left</span>
-      <button class="theme-btn" id="theme-btn" onclick="toggleTheme()">&#9788; Light</button>
+      <button class="theme-btn" id="qr-btn" onclick="showQR()">&#x25A6; QR</button>
+      <button class="theme-btn" id="theme-btn" onclick="toggleTheme()">&#9728; Light</button>
+    </div>
+    <div class="hdr-mobile-meta" id="hdr-mobile">
+      <span class="session-pill">{{.SessionHours}}h left</span>
+      <div class="hdr-icons">
+        <button class="hdr-icon-btn" id="theme-btn-m" onclick="toggleTheme()">&#9728;&#xFE0E;</button>
+        <button class="hdr-icon-btn" onclick="showQR()">&#x25A6;&#xFE0E;</button>
+        <span class="hdr-connected">&#x2299;</span>
+      </div>
     </div>
   </header>
 
@@ -380,6 +475,14 @@ footer{padding:1.75rem 0;border-top:1px solid var(--rule);margin-top:2rem;displa
       <p class="drop-sub">any format &nbsp;&#xB7;&nbsp; up to 10 GB &nbsp;&#xB7;&nbsp; click to browse</p>
       <input type="file" id="file-input" multiple>
     </div>
+    <div class="upload-compact" onclick="document.getElementById('file-input').click()">
+      <div class="uc-icon">&#x2191;</div>
+      <div class="uc-text">
+        <div class="uc-title">Upload files</div>
+        <div class="uc-sub">any format · up to 10 GB</div>
+      </div>
+      <span class="uc-chevron">&#x203A;</span>
+    </div>
     <div id="progress-wrap">
       <div id="bar-track"><div id="bar"></div></div>
       <div id="pct">0%</div>
@@ -388,9 +491,18 @@ footer{padding:1.75rem 0;border-top:1px solid var(--rule);margin-top:2rem;displa
 
     <div class="note-wrap">
       <div class="note-field">
-        <textarea id="note-input" rows="1" placeholder="Add a note or paste text..."></textarea>
-        <button id="paste-btn">⇳ Paste</button><button id="note-submit">&#x23CE; Save note</button>
+        <textarea id="note-input" rows="3" placeholder="Add a note or paste text..."></textarea>
+        <div class="note-divider"></div>
+        <div class="note-btns"><button id="paste-btn">⇳ Paste</button><button id="note-submit">&#x23CE; Save note</button></div>
       </div>
+    </div>
+  </div>
+
+  <div class="search-wrap">
+    <div class="search-field">
+      <span class="search-icon">&#x2315;</span>
+      <input id="search-input" type="search" placeholder="Search names and file contents...">
+      <button id="search-clear" style="display:none">&#xD7;</button>
     </div>
   </div>
 
@@ -400,13 +512,28 @@ footer{padding:1.75rem 0;border-top:1px solid var(--rule);margin-top:2rem;displa
     <div class="divider-line"></div>
   </div>
 
-  <div class="breadcrumb" id="breadcrumb"></div>
+  <div class="folder-row">
+    <div class="breadcrumb" id="breadcrumb" style="margin-bottom:0;flex:1"></div>
+    <button id="select-trigger" onclick="enterSelectMode()" title="Select to delete"><svg width="15" height="15" viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round"><polyline points="2,4 14,4"/><path d="M5 4V3a1 1 0 0 1 1-1h4a1 1 0 0 1 1 1v1"/><path d="M13 4l-.8 10H3.8L3 4"/><line x1="6.5" y1="7" x2="6.5" y2="11"/><line x1="9.5" y1="7" x2="9.5" y2="11"/></svg></button>
+  </div>
   <div class="file-list" id="file-list"></div>
 
   <footer>
     <span class="ft-l">FileDrop &nbsp;&#xB7;&nbsp; LAN only</span>
+    <div id="disk-bar-wrap" style="display:none">
+      <div id="disk-bar-track"><div id="disk-bar-fill" style="width:0%"></div></div>
+      <span id="disk-label"></span>
+    </div>
     <span class="ft-r">{{.UploadDir}}</span>
   </footer>
+</div>
+
+<div id="select-bar">
+  <span id="select-bar-count">0 selected</span>
+  <div id="select-bar-actions">
+    <button class="folder-btn" onclick="exitSelectMode()">Cancel</button>
+    <button class="folder-btn" id="select-bar-delete" style="color:#9a5a4a;border-color:#9a5a4a" onclick="confirmBulkDelete()" disabled>Delete selected</button>
+  </div>
 </div>
 
 <div id="modal">
@@ -442,18 +569,143 @@ var mCopy    = document.getElementById('modal-copy');
 var activeFile = '';
 var noteFullText = '';
 var currentPath = '';
+var currentFiles = [];
+var selectMode = false;
+var selectedPaths = new Set();
+var activeMenu = null;
+
+// ── ⋮ menu ────────────────────────────────────────────────────────────────────
+function openMenu(btn, actions) {
+  closeMenu();
+  var menu = document.createElement('div');
+  menu.className = 'row-menu';
+  actions.forEach(function(a) {
+    var item = document.createElement('button');
+    item.className = 'row-menu-item';
+    item.textContent = a.label;
+    item.addEventListener('click', function(e) { e.stopPropagation(); a.fn(); });
+    menu.appendChild(item);
+  });
+  btn.parentElement.appendChild(menu);
+  activeMenu = menu;
+}
+function closeMenu() {
+  if (activeMenu) { activeMenu.remove(); activeMenu = null; }
+}
+document.addEventListener('click', function(e) {
+  if (activeMenu && !activeMenu.contains(e.target)) closeMenu();
+});
+
+// ── Bulk delete ───────────────────────────────────────────────────────────────
+function enterSelectMode() {
+  selectMode = true;
+  list.classList.add('selecting');
+  document.getElementById('select-bar').style.display = 'flex';
+  document.getElementById('select-trigger').style.display = 'none';
+  updateSelectBar();
+  renderList(currentFiles);
+}
+function exitSelectMode() {
+  selectMode = false;
+  selectedPaths.clear();
+  list.classList.remove('selecting');
+  document.getElementById('select-bar').style.display = 'none';
+  document.getElementById('select-trigger').style.display = '';
+  renderList(currentFiles);
+}
+function toggleSelect(path, checked) {
+  if (checked) { selectedPaths.add(path); } else { selectedPaths.delete(path); }
+  updateSelectBar();
+}
+function updateSelectBar() {
+  var n = selectedPaths.size;
+  document.getElementById('select-bar-count').textContent = n + ' selected';
+  document.getElementById('select-bar-delete').disabled = n === 0;
+}
+function confirmBulkDelete() {
+  if (!selectedPaths.size) return;
+  var paths = Array.from(selectedPaths);
+  var done = 0, failed = 0;
+  function next(i) {
+    if (i >= paths.length) {
+      exitSelectMode();
+      loadFiles();
+      if (failed > 0) { msg.className='err'; msg.textContent='// '+done+' deleted, '+failed+' failed (non-empty folders cannot be deleted)'; }
+      return;
+    }
+    fetch('/delete?name='+encodeURIComponent(paths[i]), {method:'POST'})
+      .then(function(r){ if(r.ok) done++; else failed++; next(i+1); })
+      .catch(function(){ failed++; next(i+1); });
+  }
+  next(0);
+}
+
+function deleteItem(path) {
+  fetch('/delete?name='+encodeURIComponent(path), {method:'POST'})
+    .then(function(r){
+      if (r.ok) { loadFiles(); }
+      else { r.text().then(function(t){ msg.className='err'; msg.textContent='// delete: '+t; }); }
+    })
+    .catch(function(){ msg.className='err'; msg.textContent='// delete: network error'; });
+}
+
+// ── Export ────────────────────────────────────────────────────────────────────
+function exportFile(path, btn) {
+  if (btn) btn.disabled = true;
+  var orig = btn ? btn.textContent : '';
+  fetch('/export?name='+encodeURIComponent(path), {method:'POST'})
+    .then(function(r) {
+      if (r.ok) {
+        closeMenu();
+        if (btn) { btn.textContent = '✓'; setTimeout(function() { btn.textContent = orig; btn.disabled = false; }, 1800); }
+      } else {
+        r.text().then(function(t){ msg.className='err'; msg.textContent='// export: '+t; });
+        if (btn) btn.disabled = false;
+        closeMenu();
+      }
+    })
+    .catch(function() { msg.className='err'; msg.textContent='// export: network error'; if (btn) btn.disabled = false; closeMenu(); });
+}
+
+
+// ── QR code ───────────────────────────────────────────────────────────────────
+function showQR() {
+  mName.textContent = 'Scan to open on this device';
+  mContent.innerHTML = '<img src="/qr.png" alt="QR" style="width:220px;height:220px;image-rendering:pixelated">';
+  mDl.style.display = 'none';
+  mCopy.style.display = 'none';
+  modal.classList.add('open');
+  document.body.style.overflow = 'hidden';
+}
+
+// ── Disk usage ────────────────────────────────────────────────────────────────
+function loadDisk() {
+  fetch('/disk').then(function(r){return r.json();}).then(function(d){
+    if (!d.total) return;
+    var used = d.total - d.free;
+    var pct = Math.round(used / d.total * 100);
+    var wrap = document.getElementById('disk-bar-wrap');
+    document.getElementById('disk-bar-fill').style.width = pct + '%';
+    document.getElementById('disk-label').textContent = fmtSize(d.free) + ' free';
+    wrap.style.display = 'flex';
+  }).catch(function(){});
+}
 
 // ── Theme ──────────────────────────────────────────────────────────────────────
 function toggleTheme() {
   var light = document.body.classList.toggle('light');
-  document.getElementById('theme-btn').textContent = light ? '\u2600 Dark' : '\u2688 Light';
+  document.getElementById('theme-btn').textContent = light ? '\u263e Dark' : '\u2600 Light';
+  var m = document.getElementById('theme-btn-m');
+  if (m) m.textContent = light ? '\u263e\ufe0e' : '\u2600\ufe0e';
   try { localStorage.setItem('fd_theme', light ? 'light' : 'dark'); } catch(e){}
 }
 (function(){
   try {
     if (localStorage.getItem('fd_theme') === 'light') {
       document.body.classList.add('light');
-      document.getElementById('theme-btn').textContent = '\u2600 Dark';
+      document.getElementById('theme-btn').textContent = '\u263e Dark';
+      var m = document.getElementById('theme-btn-m');
+      if (m) m.textContent = '\u263e\ufe0e';
     }
   } catch(e){}
 })();
@@ -618,51 +870,77 @@ function renderBreadcrumb() {
 function loadFiles() {
   var url = '/files' + (currentPath ? '?path=' + encodeURIComponent(currentPath) : '');
   fetch(url).then(function(r){return r.json();}).then(function(files){
-    list.innerHTML='';
-    if (!files||!files.length){
-      divT.textContent = currentPath ? 'Empty folder' : 'Empty';
-      list.innerHTML='<div class="empty-state">// nothing here yet</div>';
-      return;
-    }
-    var totalBytes=0, fileCount=0;
-    for (var i=0;i<files.length;i++) {
-      if (!files[i].is_note && !files[i].is_dir) { totalBytes+=files[i].size; fileCount++; }
-    }
-    var dirCount = files.filter(function(f){return f.is_dir;}).length;
-    var label = '';
-    if (dirCount) label += dirCount + ' folder' + (dirCount!==1?'s':'');
-    if (fileCount) label += (label?' · ':'')+fileCount+' file'+(fileCount!==1?'s':'');
-    if (totalBytes) label += ' · '+fmtSize(totalBytes);
-    divT.textContent = label || 'Empty';
-    for (var i=0;i<files.length;i++){
-      if (files[i].is_dir) list.appendChild(makeDirRow(files[i]));
-      else if (files[i].is_note) list.appendChild(makeNoteRow(files[i]));
-      else list.appendChild(makeFileRow(files[i]));
-    }
+    currentFiles = files || [];
+    lastFilesJSON = JSON.stringify(files);
+    renderList(currentFiles);
   }).catch(function(){ list.innerHTML='<div class="empty-state">// error loading</div>'; });
+}
+
+function renderList(files) {
+  list.innerHTML='';
+  if (!files||!files.length){
+    divT.textContent = currentPath ? 'Empty folder' : 'Empty';
+    list.innerHTML='<div class="empty-state">// nothing here yet</div>';
+    return;
+  }
+  var totalBytes=0, fileCount=0;
+  for (var i=0;i<files.length;i++) {
+    if (!files[i].is_note && !files[i].is_dir) { totalBytes+=files[i].size; fileCount++; }
+  }
+  var dirCount = files.filter(function(f){return f.is_dir;}).length;
+  var label = '';
+  if (dirCount) label += dirCount + ' folder' + (dirCount!==1?'s':'');
+  if (fileCount) label += (label?' · ':'')+fileCount+' file'+(fileCount!==1?'s':'');
+  if (totalBytes) label += ' · '+fmtSize(totalBytes);
+  divT.textContent = label || 'Empty';
+  for (var i=0;i<files.length;i++){
+    if (files[i].is_dir) list.appendChild(makeDirRow(files[i]));
+    else if (files[i].is_note) list.appendChild(makeNoteRow(files[i]));
+    else list.appendChild(makeFileRow(files[i]));
+  }
 }
 
 function makeDirRow(f) {
   var el = document.createElement('div');
   el.className = 'file-item dir-item';
   el.style.cursor = 'pointer';
+  var dirPath = currentPath ? currentPath+'/'+f.name : f.name;
+  var displayName = f.name.split('/').pop();
+  var parentDir = f.name.includes('/') ? f.name.slice(0, f.name.lastIndexOf('/')) : '';
+  var checkHtml = selectMode ? '<label class="row-check"><input type="checkbox"'+(selectedPaths.has(dirPath)?' checked':'')+' data-path="'+esc(dirPath)+'"></label>' : '';
   el.innerHTML =
+    checkHtml+
     '<div class="file-thumb ft-dir">DIR</div>'+
     '<div class="file-info-col" style="cursor:pointer">'+
-      '<div class="file-name dir-name">'+esc(f.name)+'</div>'+
-      '<div class="file-type-date">Folder \u00B7 '+fmtDate(f.modified)+'</div>'+
+      '<div class="file-name dir-name">'+esc(displayName)+'</div>'+
+      '<div class="file-type-date">Folder \u00B7 '+fmtDate(f.modified)+(parentDir?' \u00B7 <span style="opacity:.6">'+esc(parentDir)+'</span>':'')+'</div>'+
     '</div>'+
-    '<div class="file-size"></div>'+
-    '<div class="file-sep"></div>'+
-    '<button class="view-btn" title="Open folder">\u25B7 open</button>'+
-    '<div class="file-sep" style="opacity:0"></div>'+
-    '<button class="dl-btn" style="opacity:0" disabled></button>';
-  var enterDir = (function(name){ return function(){ navigateTo(currentPath ? currentPath+'/'+name : name); }; })(f.name);
-  el.querySelector('.file-info-col').addEventListener('click', enterDir);
-  el.querySelector('.view-btn').addEventListener('click', enterDir);
-  el.addEventListener('click', function(e){
-    if(e.target===el) enterDir();
-  });
+    '<div class="file-actions">'+
+      '<button class="view-btn" title="Open">\u25B7 <span class="btn-lbl">open</span></button>'+
+      '<button class="menu-btn" title="Options">\u22EE</button>'+
+    '</div>';
+  if (selectMode) {
+    var cb = el.querySelector('input[type=checkbox]');
+    el.addEventListener('click', function(e) {
+      if (e.target.tagName==='BUTTON'||e.target.tagName==='INPUT'||e.target.tagName==='LABEL') return;
+      cb.checked = !cb.checked; toggleSelect(dirPath, cb.checked);
+    });
+    cb.addEventListener('change', function() { toggleSelect(dirPath, this.checked); });
+  } else {
+    var enterDir = (function(p){ return function(){ navigateTo(p); }; })(dirPath);
+    el.querySelector('.view-btn').addEventListener('click', function(e){ e.stopPropagation(); enterDir(); });
+    el.addEventListener('click', function(e){
+      if (e.target.closest('button,input,label')) return;
+      enterDir();
+    });
+    el.querySelector('.menu-btn').addEventListener('click', (function(p){ return function(e){
+      e.stopPropagation();
+      openMenu(e.currentTarget, [
+        {label:'↗ Export folder', fn:function(){ exportFile(p,null); }},
+        {label:'✕ Delete', fn:function(){ deleteItem(p); closeMenu(); }}
+      ]);
+    }; })(dirPath));
+  }
   return el;
 }
 
@@ -670,53 +948,111 @@ function makeNoteRow(f) {
   var el = document.createElement('div');
   el.className = 'note-item';
   var notePath = currentPath ? currentPath+'/'+f.name : f.name;
+  var parentDir = f.name.includes('/') ? f.name.slice(0, f.name.lastIndexOf('/')) : '';
+  var checkHtml = selectMode ? '<label class="row-check"><input type="checkbox"'+(selectedPaths.has(notePath)?' checked':'')+' data-path="'+esc(notePath)+'"></label>' : '';
   el.innerHTML =
+    checkHtml+
     '<div>'+
       '<div class="note-snippet">'+esc(f.snippet||'')+'</div>'+
-      '<div class="note-meta">Note \u00B7 '+fmtDate(f.modified)+'</div>'+
+      '<div class="note-meta">Note \u00B7 '+fmtDate(f.modified)+(parentDir?' \u00B7 <span style="opacity:.6">'+esc(parentDir)+'</span>':'')+'</div>'+
     '</div>'+
     '<div class="note-actions">'+
-      '<button class="copy-btn">\u2398 copy</button>'+
-      '<button class="view-btn">\u25B7 view</button>'+
-    '</div>';
-  var copyBtn = el.querySelector('.copy-btn');
-  copyBtn.addEventListener('click', (function(p,btn){
-    return function(){
-      fetch('/file?name='+encodeURIComponent(p)).then(function(r){return r.text();}).then(function(text){
-        copyText(text, btn, '\u2398 copy');
-      });
-    };
-  })(notePath, copyBtn));
-  el.querySelector('.view-btn').addEventListener('click', (function(p){ return function(){ openNotePreview(p); }; })(notePath));
+      '<button class="copy-btn" title="Copy text">\u2398 <span class="btn-lbl">copy</span></button>'+
+      '<div class="action-sep"></div>'+
+      '<button class="view-btn" title="Preview">\u25B7 <span class="btn-lbl">view</span></button>'+
+      '<div class="action-sep"></div>'+
+      '<button class="export-btn" title="Copy to export folder">\u2197 <span class="btn-lbl">upl</span></button>'+
+    '</div>'+
+    '<button class="menu-btn" title="Options">\u22EE</button>';
+  if (selectMode) {
+    var cb = el.querySelector('input[type=checkbox]');
+    el.addEventListener('click', function(e) {
+      if (e.target.tagName==='BUTTON'||e.target.tagName==='INPUT'||e.target.tagName==='LABEL') return;
+      cb.checked = !cb.checked; toggleSelect(notePath, cb.checked);
+    });
+    cb.addEventListener('change', function() { toggleSelect(notePath, this.checked); });
+  } else {
+    var copyBtn = el.querySelector('.copy-btn');
+    copyBtn.addEventListener('click', (function(p,btn){
+      return function(e){
+        e.stopPropagation();
+        fetch('/file?name='+encodeURIComponent(p)).then(function(r){return r.text();}).then(function(text){
+          copyText(text, btn, '\u2398');
+        });
+      };
+    })(notePath, copyBtn));
+    el.querySelector('.view-btn').addEventListener('click', function(e){ e.stopPropagation(); openNotePreview(notePath); });
+    var expBtn = el.querySelector('.export-btn');
+    expBtn.addEventListener('click', (function(p,b){ return function(e){ e.stopPropagation(); exportFile(p,b); }; })(notePath, expBtn));
+    el.addEventListener('click', function(e){
+      if (e.target.closest('button,input,label')) return;
+      openNotePreview(notePath);
+    });
+    el.querySelector('.menu-btn').addEventListener('click', (function(p){ return function(e){
+      e.stopPropagation();
+      openMenu(e.currentTarget, [
+        {label:'\u2398 Copy text', fn:function(){
+          fetch('/file?name='+encodeURIComponent(p)).then(function(r){return r.text();}).then(function(t){ copyText(t,null,''); closeMenu(); });
+        }},
+        {label:'\u2197 Export', fn:function(){ exportFile(p,null); }},
+        {label:'✕ Delete', fn:function(){ deleteItem(p); closeMenu(); }}
+      ]);
+    }; })(notePath));
+  }
   return el;
 }
 
 function makeFileRow(f) {
-  var ext = f.name.includes('.') ? f.name.split('.').pop().toLowerCase() : '';
-  var base = ext ? f.name.slice(0,f.name.length-ext.length-1) : f.name;
+  var displayName = f.name.split('/').pop();
+  var ext = displayName.includes('.') ? displayName.split('.').pop().toLowerCase() : '';
+  var base = ext ? displayName.slice(0,displayName.length-ext.length-1) : displayName;
   var kind = previewKind(ext);
   var filePath = currentPath ? currentPath+'/'+f.name : f.name;
+  var parentDir = f.name.includes('/') ? f.name.slice(0, f.name.lastIndexOf('/')) : '';
+  var checkHtml = selectMode ? '<label class="row-check"><input type="checkbox"'+(selectedPaths.has(filePath)?' checked':'')+' data-path="'+esc(filePath)+'"></label>' : '';
   var el = document.createElement('div');
   el.className = 'file-item';
+  var metaLine = fileType(ext)+' \u00B7 '+fmtDate(f.modified)+' \u00B7 '+fmtSize(f.size)+(parentDir?' \u00B7 <span style="opacity:.6">'+esc(parentDir)+'</span>':'');
   el.innerHTML =
-    '<div class="file-thumb '+thumbCls(ext)+'">'+thumb(f.name,ext,filePath)+'</div>'+
+    checkHtml+
+    '<div class="file-thumb '+thumbCls(ext)+'">'+thumb(displayName,ext,filePath)+'</div>'+
     '<div class="file-info-col">'+
       '<div class="file-name">'+esc(base)+'<span class="file-name-ext">'+(ext?'.'+esc(ext):'')+'</span></div>'+
-      '<div class="file-type-date">'+fileType(ext)+' \u00B7 '+fmtDate(f.modified)+'</div>'+
+      '<div class="file-type-date">'+metaLine+'</div>'+
+      (f.snippet?'<div class="search-snippet">'+esc(f.snippet)+'</div>':'')+
     '</div>'+
-    '<div class="file-size">'+fmtSize(f.size)+'</div>'+
-    '<div class="file-sep"></div>'+
-    '<button class="view-btn"'+(kind?'':' disabled')+'>&#x25B7; view</button>'+
-    '<div class="file-sep"></div>'+
-    '<button class="dl-btn">&#x2193; dl</button>';
-  var col = el.querySelector('.file-info-col');
-  if (kind) {
-    col.addEventListener('click',(function(p){return function(){openPreview(p);};})(filePath));
-    el.querySelector('.view-btn').addEventListener('click',(function(p){return function(){openPreview(p);};})(filePath));
+    '<div class="file-actions">'+
+      (kind ? '<button class="view-btn" title="Preview">&#x25B7; <span class="btn-lbl">view</span></button><div class="action-sep"></div>' : '')+
+      '<button class="export-btn" title="Copy to export folder">&#x2197; <span class="btn-lbl">upl</span></button>'+
+      '<button class="dl-btn" title="Download">&#x2193; <span class="btn-lbl">dl</span></button>'+
+      '<button class="menu-btn" title="Options">&#x22EE;</button>'+
+    '</div>';
+  if (selectMode) {
+    var cb = el.querySelector('input[type=checkbox]');
+    el.addEventListener('click', function(e) {
+      if (e.target.tagName==='BUTTON'||e.target.tagName==='INPUT'||e.target.tagName==='LABEL') return;
+      cb.checked = !cb.checked; toggleSelect(filePath, cb.checked);
+    });
+    cb.addEventListener('change', function() { toggleSelect(filePath, this.checked); });
   } else {
-    col.style.cursor='default';
+    if (!kind) el.querySelector('.file-info-col').style.cursor = 'default';
+    el.addEventListener('click', (function(p,k){ return function(e){
+      if (e.target.closest('button,input,label')) return;
+      if (k) openPreview(p);
+    }; })(filePath, kind));
+    if (kind) el.querySelector('.view-btn').addEventListener('click',(function(p){return function(e){ e.stopPropagation(); openPreview(p); };})(filePath));
+    el.querySelector('.dl-btn').addEventListener('click',(function(p){return function(e){ e.stopPropagation(); dlFile(p); };})(filePath));
+    var expBtn = el.querySelector('.export-btn');
+    expBtn.addEventListener('click',(function(p,b){return function(e){ e.stopPropagation(); exportFile(p,b); };})(filePath,expBtn));
+    el.querySelector('.menu-btn').addEventListener('click', (function(p){ return function(e){
+      e.stopPropagation();
+      openMenu(e.currentTarget, [
+        {label:'↓ Download', fn:function(){ dlFile(p); closeMenu(); }},
+        {label:'↗ Export', fn:function(){ exportFile(p,null); }},
+        {label:'✕ Delete', fn:function(){ deleteItem(p); closeMenu(); }}
+      ]);
+    }; })(filePath));
   }
-  el.querySelector('.dl-btn').addEventListener('click',(function(p){return function(){dlFile(p);};})(filePath));
   return el;
 }
 
@@ -820,8 +1156,62 @@ function esc(s){
   return String(s).replace(/&/g,'&amp;').replace(/</g,'&lt;').replace(/>/g,'&gt;').replace(/"/g,'&quot;');
 }
 
+// ── Search ────────────────────────────────────────────────────────────────────
+var searchInput = document.getElementById('search-input');
+var searchClear = document.getElementById('search-clear');
+var searchTimer = null;
+
+searchInput.addEventListener('input', function() {
+  var q = this.value.trim();
+  searchClear.style.display = q ? '' : 'none';
+  clearTimeout(searchTimer);
+  searchTimer = setTimeout(function() {
+    if (q) { loadSearch(q); } else { loadFiles(); }
+  }, 300);
+});
+
+searchClear.addEventListener('click', function() {
+  searchInput.value = '';
+  searchClear.style.display = 'none';
+  loadFiles();
+});
+
+function loadSearch(q) {
+  fetch('/search?q='+encodeURIComponent(q))
+    .then(function(r){return r.json();})
+    .then(function(files){
+      currentFiles = files || [];
+      list.innerHTML = '';
+      if (!currentFiles.length) {
+        divT.textContent = 'No results for "'+q+'"';
+        list.innerHTML = '<div class="empty-state">// nothing matched</div>';
+        return;
+      }
+      divT.textContent = currentFiles.length+' result'+(currentFiles.length!==1?'s':'')+' for "'+q+'"';
+      for (var i=0;i<currentFiles.length;i++){
+        if (currentFiles[i].is_dir) list.appendChild(makeDirRow(currentFiles[i]));
+        else if (currentFiles[i].is_note) list.appendChild(makeNoteRow(currentFiles[i]));
+        else list.appendChild(makeFileRow(currentFiles[i]));
+      }
+    })
+    .catch(function(){ list.innerHTML='<div class="empty-state">// search error</div>'; });
+}
+
 loadFiles();
-setInterval(loadFiles, 5000);
+loadDisk();
+var lastFilesJSON = '';
+setInterval(function(){
+  if (searchInput.value.trim() || selectMode) return;
+  var url = '/files' + (currentPath ? '?path=' + encodeURIComponent(currentPath) : '');
+  fetch(url).then(function(r){ return r.json(); }).then(function(files){
+    var json = JSON.stringify(files);
+    if (json !== lastFilesJSON) {
+      lastFilesJSON = json;
+      currentFiles = files || [];
+      renderList(currentFiles);
+    }
+  }).catch(function(){});
+}, 5000);
 
 </script>
 </body>
@@ -993,12 +1383,13 @@ func handleUpload(w http.ResponseWriter, r *http.Request) {
 }
 
 type fileEntry struct {
-	Name     string    `json:"name"`
-	Size     int64     `json:"size"`
-	Modified time.Time `json:"modified"`
-	IsNote   bool      `json:"is_note"`
-	IsDir    bool      `json:"is_dir"`
-	Snippet  string    `json:"snippet,omitempty"`
+	Name         string    `json:"name"`
+	Size         int64     `json:"size"`
+	Modified     time.Time `json:"modified"`
+	IsNote       bool      `json:"is_note"`
+	IsDir        bool      `json:"is_dir"`
+	Snippet      string    `json:"snippet,omitempty"`
+	MatchContent bool      `json:"match_content,omitempty"`
 }
 
 
@@ -1123,6 +1514,67 @@ func handleNote(w http.ResponseWriter, r *http.Request) {
 	fmt.Fprint(w, "ok")
 }
 
+func handleDelete(w http.ResponseWriter, r *http.Request) {
+	if !isAuthed(r) {
+		http.Error(w, "unauthorized", http.StatusUnauthorized)
+		return
+	}
+	if r.Method != http.MethodPost {
+		http.Error(w, "method not allowed", http.StatusMethodNotAllowed)
+		return
+	}
+	rawName := r.URL.Query().Get("name")
+	fpath, ok := safeSubpath(cfg.UploadDir, rawName)
+	if !ok || rawName == "" {
+		http.Error(w, "forbidden", http.StatusForbidden)
+		return
+	}
+	if err := os.Remove(fpath); err != nil {
+		if os.IsNotExist(err) {
+			http.Error(w, "not found", http.StatusNotFound)
+		} else {
+			http.Error(w, "cannot delete — directory may not be empty", http.StatusBadRequest)
+			logger.Printf("ERROR delete %s: %v", fpath, err)
+		}
+		return
+	}
+	logger.Printf("deleted: %s", fpath)
+	w.WriteHeader(http.StatusOK)
+	fmt.Fprint(w, "ok")
+}
+
+
+func handleQR(w http.ResponseWriter, r *http.Request) {
+	if !isAuthed(r) {
+		http.Error(w, "unauthorized", http.StatusUnauthorized)
+		return
+	}
+	host := r.Host
+	if host == "" {
+		host = fmt.Sprintf("localhost:%d", cfg.Port)
+	}
+	png, err := qrcode.Encode("http://"+host+"/", qrcode.Medium, 256)
+	if err != nil {
+		http.Error(w, "qr error", http.StatusInternalServerError)
+		return
+	}
+	w.Header().Set("Content-Type", "image/png")
+	w.Header().Set("Cache-Control", "no-cache")
+	w.Write(png)
+}
+
+func handleDisk(w http.ResponseWriter, r *http.Request) {
+	if !isAuthed(r) {
+		http.Error(w, "unauthorized", http.StatusUnauthorized)
+		return
+	}
+	var free, total uint64
+	if p, err := windows.UTF16PtrFromString(cfg.UploadDir); err == nil {
+		windows.GetDiskFreeSpaceEx(p, &free, &total, nil)
+	}
+	w.Header().Set("Content-Type", "application/json")
+	json.NewEncoder(w).Encode(map[string]uint64{"free": free, "total": total})
+}
 
 // ─── CLI Send ─────────────────────────────────────────────────────────────────
 // Invoked by the Windows "Send To" shortcut.
@@ -1293,6 +1745,184 @@ func resolveFilename(dir, name string) string {
 	return fmt.Sprintf("%s_%d%s", base, time.Now().UnixMilli(), ext)
 }
 
+// ─── Search ───────────────────────────────────────────────────────────────────
+
+func isTextFile(name string) bool {
+	switch strings.ToLower(filepath.Ext(name)) {
+	case ".txt", ".md", ".log", ".csv", ".json", ".xml", ".html", ".htm",
+		".js", ".ts", ".go", ".py", ".rs", ".kt", ".java", ".c", ".cpp",
+		".h", ".css", ".sh", ".bat", ".ps1", ".yaml", ".yml", ".toml", ".ini":
+		return true
+	}
+	return false
+}
+
+func walkSearch(dir, base, query string, results *[]fileEntry) {
+	entries, err := os.ReadDir(dir)
+	if err != nil {
+		return
+	}
+	q := strings.ToLower(query)
+	for _, e := range entries {
+		rel := e.Name()
+		if base != "" {
+			rel = base + "/" + e.Name()
+		}
+		if e.IsDir() {
+			walkSearch(filepath.Join(dir, e.Name()), rel, query, results)
+			continue
+		}
+		fi, err := e.Info()
+		if err != nil {
+			continue
+		}
+		entry := fileEntry{Name: rel, Size: fi.Size(), Modified: fi.ModTime()}
+		isNote := strings.HasPrefix(e.Name(), "note_") && strings.HasSuffix(e.Name(), ".txt")
+		if isNote {
+			entry.IsNote = true
+		}
+		if strings.Contains(strings.ToLower(e.Name()), q) {
+			if isNote {
+				if raw, err := os.ReadFile(filepath.Join(dir, e.Name())); err == nil {
+					s := string(raw)
+					if len(s) > 160 {
+						s = s[:160] + "..."
+					}
+					entry.Snippet = s
+				}
+			}
+			*results = append(*results, entry)
+			continue
+		}
+		if isTextFile(e.Name()) && fi.Size() > 0 && fi.Size() < 2<<20 {
+			raw, err := os.ReadFile(filepath.Join(dir, e.Name()))
+			if err != nil {
+				continue
+			}
+			lower := strings.ToLower(string(raw))
+			idx := strings.Index(lower, q)
+			if idx >= 0 {
+				entry.MatchContent = true
+				start := idx - 60
+				if start < 0 {
+					start = 0
+				}
+				end := idx + len(q) + 60
+				if end > len(raw) {
+					end = len(raw)
+				}
+				entry.Snippet = "..." + string(raw[start:end]) + "..."
+				*results = append(*results, entry)
+			}
+		}
+	}
+}
+
+func copyFile(src, dst string) error {
+	in, err := os.Open(src)
+	if err != nil {
+		return err
+	}
+	defer in.Close()
+	out, err := os.OpenFile(dst, os.O_CREATE|os.O_EXCL|os.O_WRONLY, 0644)
+	if err != nil {
+		return err
+	}
+	defer out.Close()
+	if _, err := io.Copy(out, in); err != nil {
+		os.Remove(dst)
+		return err
+	}
+	return nil
+}
+
+func copyDir(src, dst string) error {
+	return filepath.Walk(src, func(path string, info os.FileInfo, err error) error {
+		if err != nil {
+			return err
+		}
+		rel, err := filepath.Rel(src, path)
+		if err != nil {
+			return err
+		}
+		target := filepath.Join(dst, rel)
+		if info.IsDir() {
+			return os.MkdirAll(target, 0755)
+		}
+		return copyFile(path, target)
+	})
+}
+
+func handleExport(w http.ResponseWriter, r *http.Request) {
+	if !isAuthed(r) {
+		http.Error(w, "unauthorized", http.StatusUnauthorized)
+		return
+	}
+	if r.Method != http.MethodPost {
+		http.Error(w, "method not allowed", http.StatusMethodNotAllowed)
+		return
+	}
+	if cfg.ExportDir == "" {
+		http.Error(w, "export directory not configured", http.StatusServiceUnavailable)
+		return
+	}
+	rawName := r.URL.Query().Get("name")
+	srcPath, ok := safeSubpath(cfg.UploadDir, rawName)
+	if !ok || rawName == "" {
+		http.Error(w, "forbidden", http.StatusForbidden)
+		return
+	}
+	fi, err := os.Stat(srcPath)
+	if err != nil {
+		http.Error(w, "not found", http.StatusNotFound)
+		return
+	}
+	if err := os.MkdirAll(cfg.ExportDir, 0755); err != nil {
+		http.Error(w, "cannot create export dir", http.StatusInternalServerError)
+		return
+	}
+	destName := resolveFilename(cfg.ExportDir, filepath.Base(rawName))
+	destPath := filepath.Join(cfg.ExportDir, destName)
+	if fi.IsDir() {
+		if err := copyDir(srcPath, destPath); err != nil {
+			http.Error(w, "copy error", http.StatusInternalServerError)
+			logger.Printf("ERROR export dir %s → %s: %v", srcPath, destPath, err)
+			return
+		}
+	} else {
+		if err := copyFile(srcPath, destPath); err != nil {
+			http.Error(w, "copy error", http.StatusInternalServerError)
+			logger.Printf("ERROR export file %s → %s: %v", srcPath, destPath, err)
+			return
+		}
+	}
+	logger.Printf("export: %s → %s", srcPath, destPath)
+	w.WriteHeader(http.StatusOK)
+	fmt.Fprint(w, "ok")
+}
+
+func handleSearch(w http.ResponseWriter, r *http.Request) {
+	if !isAuthed(r) {
+		http.Error(w, "unauthorized", http.StatusUnauthorized)
+		return
+	}
+	query := strings.TrimSpace(r.URL.Query().Get("q"))
+	if query == "" {
+		w.Header().Set("Content-Type", "application/json")
+		w.Write([]byte("[]"))
+		return
+	}
+	var results []fileEntry
+	walkSearch(cfg.UploadDir, "", query, &results)
+	sort.Slice(results, func(i, j int) bool {
+		return results[i].Modified.After(results[j].Modified)
+	})
+	w.Header().Set("Content-Type", "application/json")
+	if err := json.NewEncoder(w).Encode(results); err != nil {
+		logger.Printf("ERROR encoding search results: %v", err)
+	}
+}
+
 // ─── HTTP Server ──────────────────────────────────────────────────────────────
 
 func buildServer() *http.Server {
@@ -1307,6 +1937,11 @@ func buildServer() *http.Server {
 	mux.HandleFunc("/files", handleFiles)
 	mux.HandleFunc("/file", handleFile)
 	mux.HandleFunc("/note", handleNote)
+	mux.HandleFunc("/delete", handleDelete)
+	mux.HandleFunc("/qr.png", handleQR)
+	mux.HandleFunc("/disk", handleDisk)
+	mux.HandleFunc("/search", handleSearch)
+	mux.HandleFunc("/export", handleExport)
 	mux.HandleFunc("/", handleIndex)
 	return &http.Server{
 		Addr:              fmt.Sprintf(":%d", cfg.Port),
@@ -1453,11 +2088,16 @@ func runSetup() {
 	if _, err := rand.Read(secret); err != nil {
 		log.Fatalf("random error: %v", err)
 	}
+	fmt.Print("Export folder for Google Drive / cloud sync (leave blank to skip): ")
+	exportDir, _ := reader.ReadString('\n')
+	exportDir = strings.TrimSpace(exportDir)
+
 	cfg = Config{
 		PasswordHash: string(hash),
 		Secret:       hex.EncodeToString(secret),
 		UploadDir:    uploadDir,
 		Port:         port,
+		ExportDir:    exportDir,
 	}
 	if err := saveConfig(); err != nil {
 		log.Fatalf("save config: %v", err)
@@ -1526,7 +2166,7 @@ func main() {
 			log.Fatalf("cannot create upload dir: %v", err)
 		}
 		srv := buildServer()
-		log.Printf("serving on :%d — upload dir: %s", cfg.Port, cfg.UploadDir)
+		log.Printf("serving on http://localhost:%d — upload dir: %s", cfg.Port, cfg.UploadDir)
 		log.Fatal(srv.ListenAndServe())
 	case "send":
 		runSend(os.Args[2:])
