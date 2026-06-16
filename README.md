@@ -6,14 +6,18 @@ A self-hosted LAN file-drop server for Windows. Upload files, paste notes, and s
 
 ## Features
 
-- Drag-and-drop or click-to-browse upload (up to 10 GB per file)
+- Drag-and-drop or click-to-browse upload on desktop (up to 10 GB per file)
+- Compact tap-to-upload card on mobile
 - Paste images from clipboard directly into the drop zone
 - Save text notes without creating a file
 - Folder navigation and inline preview (images, video, audio, PDF)
+- Export files to a secondary directory on the host
 - Dark and light theme, persisted per browser
+- Responsive layout — full desktop view with action buttons, streamlined mobile view with per-item menus
 - Runs as a Windows background service (auto-starts on boot)
 - CLI `send` command + Windows "Send To" shortcut integration
 - Session cookie auth with 24-hour TTL
+- QR code for quick access from a phone
 
 ## Requirements
 
@@ -66,9 +70,16 @@ Create a Windows "Send To" shortcut pointing at `filedrop.exe send` so you can r
   "password_hash": "...",
   "secret": "...",
   "upload_dir": "D:\\host",
-  "port": 5743
+  "port": 5743,
+  "export_dir": "D:\\public_drive"
 }
 ```
+
+| Field | Description |
+|---|---|
+| `upload_dir` | Where uploaded files and notes are stored |
+| `port` | HTTP port the server listens on |
+| `export_dir` | Optional secondary directory files can be copied to via the ↗ button |
 
 Re-run `filedrop.exe setup` to change the password or upload directory.
 
