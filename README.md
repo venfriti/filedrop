@@ -43,10 +43,6 @@ Runs two independent servers from a single binary: a private LAN server for your
     <td width="50%" align="center"><img src=".github/screenshot-share.png" alt="Shared folder banner with QR code and link" width="100%"><br><sub>Shared folder with link and QR code</sub></td>
     <td width="50%" align="center"><img src=".github/screenshot-command.png" alt="Ctrl+K command bar listing actions" width="100%"><br><sub>Command bar (Ctrl+K)</sub></td>
   </tr>
-  <tr>
-    <td width="50%" align="center"><img src=".github/screenshot-settings.png" alt="Settings panel with theme, accent and file options" width="100%"><br><sub>Settings</sub></td>
-    <td width="50%" align="center"><img src=".github/screenshot-note.png" alt="New note dialog" width="100%"><br><sub>Notes</sub></td>
-  </tr>
 </table>
 
 ### Phone
