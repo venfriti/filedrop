@@ -32,11 +32,32 @@ Runs two independent servers from a single binary: a private LAN server for your
 
 ## Screenshots
 
-| Grid view (light) | Inline preview | Shared folder & QR |
-|---|---|---|
-| ![grid view in light mode with image and video thumbnails](.github/screenshot-grid.png) | ![image preview](.github/screenshot-preview.png) | ![shared folder banner with QR code and link](.github/screenshot-share.png) |
-| **Command bar** | **Settings** | **Phone** |
-| ![Ctrl+K command bar listing actions](.github/screenshot-command.png) | ![settings panel with theme, accent and file options](.github/screenshot-settings.png) | ![phone layout with pinned chips and bottom bar](.github/screenshot-mobile.png) |
+### Desktop
+
+<table>
+  <tr>
+    <td width="50%" align="center"><img src=".github/screenshot-grid.png" alt="Grid view in light mode with image and video thumbnails" width="100%"><br><sub>Grid view (light)</sub></td>
+    <td width="50%" align="center"><img src=".github/screenshot-preview.png" alt="Image preview" width="100%"><br><sub>Inline preview</sub></td>
+  </tr>
+  <tr>
+    <td width="50%" align="center"><img src=".github/screenshot-share.png" alt="Shared folder banner with QR code and link" width="100%"><br><sub>Shared folder with link and QR code</sub></td>
+    <td width="50%" align="center"><img src=".github/screenshot-command.png" alt="Ctrl+K command bar listing actions" width="100%"><br><sub>Command bar (Ctrl+K)</sub></td>
+  </tr>
+  <tr>
+    <td width="50%" align="center"><img src=".github/screenshot-settings.png" alt="Settings panel with theme, accent and file options" width="100%"><br><sub>Settings</sub></td>
+    <td width="50%" align="center"><img src=".github/screenshot-note.png" alt="New note dialog" width="100%"><br><sub>Notes</sub></td>
+  </tr>
+</table>
+
+### Phone
+
+<table>
+  <tr>
+    <td width="33%" align="center"><img src=".github/screenshot-mobile.png" alt="Phone list view in dark mode with pinned chips and bottom bar" width="100%"><br><sub>List (dark)</sub></td>
+    <td width="33%" align="center"><img src=".github/screenshot-mobile-grid.png" alt="Phone grid view in light mode" width="100%"><br><sub>Grid (light)</sub></td>
+    <td width="33%" align="center"><img src=".github/screenshot-mobile-drawer.png" alt="Phone folder drawer with pinned items and folder tree" width="100%"><br><sub>Folder drawer</sub></td>
+  </tr>
+</table>
 
 ## Requirements
 
