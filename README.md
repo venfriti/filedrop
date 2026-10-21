@@ -4,26 +4,27 @@ A self-hosted file-drop server for Windows. Upload files, paste notes, and share
 
 Runs two independent servers from a single binary: a private LAN server for your local network and an optional public server exposed via Cloudflare Tunnel with its own password and session. The public server can serve from a local folder or, if configured, directly from a Cloudflare R2 bucket.
 
-![dark UI with drop zone and file list](.github/screenshot-main.png)
+![FileDrop in dark mode: folder sidebar, pinned items and a color-coded file list](.github/screenshot-main.png)
 
 ## Features
 
-- Drag-and-drop or click-to-browse upload on desktop (up to 10 GB per file)
-- Compact tap-to-upload card on mobile
-- Paste images from clipboard directly into the drop zone
-- Save text notes without creating a file
-- Folder navigation and inline preview (images, video, audio, PDF)
-- Upload a whole folder; download any folder as a zip
-- Search across file names and the contents of text files
-- Filter the file list by extension
-- Multi-select mode for bulk deletion
-- Export files to a secondary directory on the host
-- Dark and light theme, persisted per browser
-- Responsive layout — full desktop view with action buttons, streamlined mobile view with per-item menus
+- Drop files anywhere in the window to upload, or use the Upload button (up to 10 GB per file); upload a whole folder with its structure
+- Sidebar with the full folder tree — drag a file onto any folder to move it
+- Pin files and folders: they stay at the top of their folder and in the sidebar's Pinned list
+- List and grid views, color-coded file types, and thumbnails for images and videos
+- Command bar (Ctrl+K) that searches file names and the contents of text files, and runs actions like New folder or Upload
+- Inline preview for images, video, audio and PDF; video in formats browsers can't play (e.g. MKV) is converted on the fly when ffmpeg is available
+- Notes: save text without creating a file, edit them in place; paste an image into a note to upload it
+- Filter by extension, sort by date, name, size or type, multi-select for bulk copy, move, download or delete
+- Download any folder as a zip
+- Light, dark and system themes, a choice of accent colors, and a compact density — all in a Settings panel, saved per browser
+- Phone layout with a slide-out folder drawer and a bottom bar for Search, Upload and Note
 - Runs as a Windows background service (auto-starts on boot)
 - CLI `send` command + Windows "Send To" shortcut integration
 - Session cookie auth with 7-day TTL and HTTPS-aware Secure flag
-- QR code for quick access from a phone
+- QR code that opens FileDrop on your phone (encodes the machine's LAN address, so it works even from a localhost tab)
+- Share a folder by link and QR code, no password needed for the visitor; manage active links and locked items from Settings
+- Lock files or folders behind their own password
 - IP-based rate limiting — locks out an IP for 15 minutes after 10 failed login attempts
 - Login page toggle — disable the login page at runtime so only already-authenticated sessions can access the site, re-enable it when you need to let someone new in
 - Optional public server on a separate port with its own password, independent sessions, and no export access — served publicly via Cloudflare Tunnel
@@ -31,9 +32,11 @@ Runs two independent servers from a single binary: a private LAN server for your
 
 ## Screenshots
 
-| Inline preview | Share & QR | Mobile |
+| Grid view (light) | Inline preview | Shared folder & QR |
 |---|---|---|
-| ![image and video preview](.github/screenshot-preview.png) | ![share modal with QR code](.github/screenshot-share.png) | ![compact mobile layout](.github/screenshot-mobile.png) |
+| ![grid view in light mode with image and video thumbnails](.github/screenshot-grid.png) | ![image preview](.github/screenshot-preview.png) | ![shared folder banner with QR code and link](.github/screenshot-share.png) |
+| **Command bar** | **Settings** | **Phone** |
+| ![Ctrl+K command bar listing actions](.github/screenshot-command.png) | ![settings panel with theme, accent and file options](.github/screenshot-settings.png) | ![phone layout with pinned chips and bottom bar](.github/screenshot-mobile.png) |
 
 ## Requirements
 
@@ -101,7 +104,9 @@ Create a Windows "Send To" shortcut pointing at `filedrop.exe send` so you can r
   "r2_bucket": "filedrop-public",
   "r2_public_url": "https://pub-xxxxxxxx.r2.dev",
   "ffmpeg_path": "C:\\path\\to\\ffmpeg.exe",
-  "ffprobe_path": "C:\\path\\to\\ffprobe.exe"
+  "ffprobe_path": "C:\\path\\to\\ffprobe.exe",
+  "cache_dir": "C:\\ProgramData\\filedrop\\media_cache",
+  "cache_prune_days": 7
 }
 ```
 
@@ -122,10 +127,12 @@ Create a Windows "Send To" shortcut pointing at `filedrop.exe send` so you can r
 | `r2_public_url` | Public bucket URL (`https://pub-….r2.dev` or a custom domain) that downloads are redirected to |
 | `ffmpeg_path` | Full path to `ffmpeg.exe`. Optional — PATH and common install roots are searched first, but the service runs as LocalSystem and cannot see a per-user WinGet install, so setting this explicitly is usually necessary |
 | `ffprobe_path` | Full path to `ffprobe.exe`, same reasoning |
+| `cache_dir` | Where generated thumbnails, remuxed MP4s and HLS streams are kept. Optional — defaults to `C:\ProgramData\filedrop\media_cache` |
+| `cache_prune_days` | Cache entries unwatched for this many days are removed in a daily cleanup. Optional — defaults to 7; also adjustable in Settings |
 
 R2 mode activates only when `r2_account_id`, `r2_access_key`, and `r2_secret_key` are all set; if any is missing, the public server falls back to serving `export_dir` from disk.
 
-Re-run `filedrop.exe setup` to change the password or upload directory. The `login_disabled` fields can also be toggled live from the private server's header without restarting.
+Re-run `filedrop.exe setup` to change the password or upload directory. The `login_disabled` fields can also be toggled live from the Settings panel without restarting.
 
 > `config.json` holds your password hashes, signing secrets, and R2 credentials in plaintext. It is gitignored and written with mode `0600`, but treat it as a secret — anything running as your user can read it.
 

@@ -92,6 +92,8 @@ type Config struct {
 	R2PublicURL         string `json:"r2_public_url,omitempty"`
 	FFmpegPath          string `json:"ffmpeg_path,omitempty"`
 	FFprobePath         string `json:"ffprobe_path,omitempty"`
+	CacheDir            string `json:"cache_dir,omitempty"`
+	CachePruneDays      int    `json:"cache_prune_days,omitempty"`
 }
 
 // rateEntry tracks failed login attempts per IP.
@@ -190,6 +192,7 @@ func saveConfig() error {
 // ─── Server context ────────────────────────────────────────────────────────────
 
 type serverCtx struct {
+	private      bool // the LAN server; the public one lacks pins, settings and locks
 	rootDir      string
 	passHash     string
 	secret       []byte
@@ -446,35 +449,46 @@ var loginTmpl = template.Must(template.New("login").Parse(`<!DOCTYPE html>
 <title>FileDrop</title>
 <link rel="icon" href="/favicon.svg" type="image/svg+xml"><link rel="icon" href="/favicon.png" type="image/png"><link rel="apple-touch-icon" href="/apple-touch-icon.png">
 <link rel="preconnect" href="https://fonts.googleapis.com">
-<link href="https://fonts.googleapis.com/css2?family=Libre+Baskerville:ital,wght@0,400;0,700;1,400&family=IBM+Plex+Mono:wght@300;400;500&display=swap" rel="stylesheet">
+<link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+<link href="https://fonts.googleapis.com/css2?family=Plus+Jakarta+Sans:wght@400;500;600;700&display=swap" rel="stylesheet">
+<script>
+(function(){
+  var s = {};
+  try { s = JSON.parse(localStorage.getItem('fd_settings') || '{}'); } catch(e){}
+  var t = s.theme || (function(){ try { return localStorage.getItem('fd_theme'); } catch(e){ return null; } })() || 'dark';
+  if (t === 'system') t = matchMedia('(prefers-color-scheme: light)').matches ? 'light' : 'dark';
+  if (t === 'light') document.documentElement.className = 'light';
+})();
+</script>
 <style>
 *,*::before,*::after{box-sizing:border-box;margin:0;padding:0}
-:root{--bg:#110f0d;--surface:#181511;--text:#d4cfc8;--muted:#5a554e;--faint:#2a2721;--rule:#221f1b;--gold:#9a7d4a;--gold-dim:#3d3020}
-body{background:var(--bg);color:var(--text);font-family:'Libre Baskerville',Georgia,serif;display:flex;align-items:center;justify-content:center;min-height:100vh;padding:1rem}
-.wrap{width:100%;max-width:360px}
-.label{font-family:'IBM Plex Mono',monospace;font-size:.7rem;font-weight:500;letter-spacing:.12em;color:var(--muted);text-transform:uppercase;margin-bottom:1.75rem}
-h1{font-size:1.6rem;font-weight:700;color:var(--text);margin-bottom:.2rem}
-h1 span{color:var(--gold);font-weight:400;font-style:italic}
-.card{background:var(--surface);border:1px solid var(--rule);border-radius:6px;padding:2rem;margin-top:1.5rem}
-input[type=password]{width:100%;padding:.8rem 1rem;background:var(--bg);border:1px solid var(--faint);border-radius:4px;color:var(--text);font-family:'IBM Plex Mono',monospace;font-size:.9rem;outline:none;transition:border-color .15s}
-input[type=password]:focus{border-color:#3a3530}
+:root{--bg:#2d2d2d;--card:#353535;--side:#232323;--text:#d7d7d7;--head:#fff;--muted:#9a9a9a;--accent:#7383ff;--fill:#3f4fe0;--danger:#ff7d61;--shadow:0 4px 12px rgba(0,0,0,.4),0 24px 56px rgba(0,0,0,.45);--line:rgba(255,255,255,.08)}
+:root.light{--bg:#f5f5f6;--card:#fff;--side:#f5f5f6;--text:#1f1f22;--head:#000;--muted:#6e6e73;--accent:#2f3fd6;--fill:#2f3fd6;--danger:#d9480f;--shadow:0 4px 12px rgba(0,0,0,.06),0 24px 56px rgba(0,0,0,.1);--line:rgba(0,0,0,.08)}
+body{background:var(--bg);color:var(--text);font:14px/1.45 'Plus Jakarta Sans',system-ui,sans-serif;display:flex;align-items:center;justify-content:center;min-height:100vh;padding:20px;-webkit-font-smoothing:antialiased}
+.card{width:100%;max-width:360px;background:var(--card);border-radius:20px;box-shadow:var(--shadow);padding:28px}
+.brand{display:flex;align-items:center;gap:10px;margin-bottom:22px}
+.mark{width:34px;height:34px;border-radius:10px;background:var(--fill);color:#fff;display:flex;align-items:center;justify-content:center}
+.name{font-size:18px;font-weight:700;color:var(--head)}
+.label{font-size:12px;font-weight:600;color:var(--muted);margin-top:1px}
+input[type=password]{width:100%;height:44px;padding:0 14px;background:var(--side);border:none;border-radius:12px;color:var(--text);font:inherit;font-size:14px;outline:none;box-shadow:inset 0 0 0 1px var(--line)}
+input[type=password]:focus{box-shadow:inset 0 0 0 2px var(--accent)}
 input[type=password]::placeholder{color:var(--muted)}
-button{width:100%;margin-top:.875rem;padding:.8rem 1rem;background:var(--text);color:var(--bg);border:none;border-radius:4px;font-family:'IBM Plex Mono',monospace;font-size:.8rem;font-weight:500;letter-spacing:.06em;text-transform:uppercase;cursor:pointer;transition:opacity .15s}
-button:hover{opacity:.88}
-.err{margin-top:.875rem;font-family:'IBM Plex Mono',monospace;font-size:.72rem;font-weight:500;color:#9a5a4a;letter-spacing:.04em}
+button{width:100%;height:44px;margin-top:12px;background:var(--fill);color:#fff;border:none;border-radius:12px;font:inherit;font-size:14px;font-weight:600;cursor:pointer;transition:filter .15s}
+button:hover{filter:brightness(1.1)}
+.err{margin-top:12px;font-size:13px;color:var(--danger)}
 </style>
 </head>
 <body>
-<div class="wrap">
-  <p class="label">{{.Label}}</p>
-  <h1>File<span>Drop</span></h1>
-  <div class="card">
-    <form method="POST" action="/login">
-      <input type="password" name="password" placeholder="password" autofocus autocomplete="current-password">
-      <button type="submit">Unlock</button>
-      {{if .Error}}{{if .Locked}}<p class="err">// too many attempts — try again later</p>{{else}}<p class="err">// incorrect password</p>{{end}}{{end}}
-    </form>
+<div class="card">
+  <div class="brand">
+    <div class="mark"><svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.4" stroke-linecap="round" stroke-linejoin="round"><path d="M12 4v12"/><path d="M6.5 11l5.5 5.5 5.5-5.5"/><path d="M5 20h14"/></svg></div>
+    <div><div class="name">FileDrop</div><div class="label">{{.Label}}</div></div>
   </div>
+  <form method="POST" action="/login">
+    <input type="password" name="password" placeholder="Password" aria-label="Password" autofocus autocomplete="current-password">
+    <button type="submit">Sign in</button>
+    {{if .Error}}{{if .Locked}}<p class="err">Too many attempts. Try again later.</p>{{else}}<p class="err">Incorrect password.</p>{{end}}{{end}}
+  </form>
 </div>
 </body>
 </html>`))
@@ -483,488 +497,573 @@ var uploadTmpl = template.Must(template.New("upload").Parse(`<!DOCTYPE html>
 <html lang="en">
 <head>
 <meta charset="UTF-8">
-<meta name="viewport" content="width=device-width,initial-scale=1">
+<meta name="viewport" content="width=device-width,initial-scale=1,viewport-fit=cover">
 <title>FileDrop</title>
 <link rel="icon" href="/favicon.svg" type="image/svg+xml"><link rel="icon" href="/favicon.png" type="image/png"><link rel="apple-touch-icon" href="/apple-touch-icon.png">
 <link rel="preconnect" href="https://fonts.googleapis.com">
+<link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
 <script src="https://cdn.jsdelivr.net/npm/hls.js@1.5.15/dist/hls.min.js"></script>
-<link href="https://fonts.googleapis.com/css2?family=Libre+Baskerville:ital,wght@0,400;0,700;1,400&family=IBM+Plex+Mono:wght@300;400;500&display=swap" rel="stylesheet">
+<link href="https://fonts.googleapis.com/css2?family=Plus+Jakarta+Sans:wght@400;500;600;700&display=swap" rel="stylesheet">
+<script>
+// Applied before first paint so a light-theme user never sees a dark flash.
+(function(){
+  var s = {};
+  try { s = JSON.parse(localStorage.getItem('fd_settings') || '{}'); } catch(e){}
+  if (!s.theme) { try { if (localStorage.getItem('fd_theme') === 'light') s.theme = 'light'; } catch(e){} }
+  var t = s.theme || 'dark';
+  if (t === 'system') t = matchMedia('(prefers-color-scheme: light)').matches ? 'light' : 'dark';
+  var c = document.documentElement.classList;
+  if (t === 'light') c.add('pre-light');
+})();
+</script>
 <style>
 *,*::before,*::after{box-sizing:border-box;margin:0;padding:0}
 
-/* ── Dark (default) ── */
+/* ── Palette ─────────────────────────────────────────────────────────────────
+   *0 variables are the untinted base; the live variables derive from them so the
+   "tinted backgrounds" setting can mix the accent in without duplicating every
+   theme. Dark follows Poly Haven's greys; light is a formal white. */
 :root{
-  --bg:#100e0b;--surface:#1a1714;--card:#1e1b16;
-  --text:#e8ddc8;--muted:#9a8e7a;--faint:#2a2420;
-  --rule:#3a3428;--gold:#c8922a;--gold-dim:#5a4420;
-  --note-bg:#1e1b16;--note-border:#3a3428;
-  --copy-ok:#4a8a4a
+  --bg0:#2d2d2d;--side0:#232323;--raised0:#414141;--hover0:#363636;--card0:#353535;
+  --text:#d7d7d7;--head:#ffffff;--muted0:#9a9a9a;--line:rgba(255,255,255,.07);
+  --shadow:0 1px 2px rgba(0,0,0,.35),0 6px 18px rgba(0,0,0,.22);
+  --shadow-lg:0 4px 12px rgba(0,0,0,.4),0 24px 56px rgba(0,0,0,.45);
+  --btn-shadow:0 1px 2px rgba(0,0,0,.45);
+  --danger:#ff7d61;--ok:#4ade80;--scrim:rgba(0,0,0,.55);
+  --c-folder:#f5b14c;--c-image:#2dd4bf;--c-video:#a78bfa;--c-audio:#f472b6;--c-pdf:#f87171;--c-doc:#94a3b8;--c-note:#4ade80;--c-archive:#fb923c;--c-code:#a3b1c6;
+  --tile-a:16%;--soft-a:16%;
+  --accent:#7383ff;--accent-fill:#3f4fe0;
 }
-
-/* ── Light ── */
-body.light{
-  --bg:#f4efe6;--surface:#ede7db;--card:#e6dfd2;
-  --text:#2c2520;--muted:#8a7d6e;--faint:#d4cbbe;
-  --rule:#d8cfc2;--gold:#8a6830;--gold-dim:#e8d8b4;
-  --note-bg:#eee8db;--note-border:#d4c8b4;
-  --copy-ok:#3a6e3a
+:root.pre-light,body.light{
+  --bg0:#ffffff;--side0:#f5f5f6;--raised0:#e6e6e8;--hover0:#f3f3f5;--card0:#ffffff;
+  --text:#1f1f22;--head:#000000;--muted0:#6e6e73;--line:rgba(0,0,0,.07);
+  --shadow:0 1px 3px rgba(0,0,0,.07),0 6px 16px rgba(0,0,0,.05);
+  --shadow-lg:0 4px 12px rgba(0,0,0,.08),0 24px 56px rgba(0,0,0,.16);
+  --btn-shadow:0 1px 2px rgba(0,0,0,.12);
+  --danger:#d9480f;--ok:#15803d;--scrim:rgba(20,20,30,.32);
+  --c-folder:#d97706;--c-image:#0d9488;--c-video:#7c3aed;--c-audio:#db2777;--c-pdf:#dc2626;--c-doc:#475569;--c-note:#16a34a;--c-archive:#ea580c;--c-code:#64748b;
+  --tile-a:11%;--soft-a:10%;
+  --accent:#2f3fd6;--accent-fill:#2f3fd6;
 }
+body[data-accent=cobalt]{--accent:#5c84ff;--accent-fill:#2a5aff}
+body.light[data-accent=cobalt]{--accent:#1f4fff;--accent-fill:#1f4fff}
+body[data-accent=steel]{--accent:#7fa6d4;--accent-fill:#3d6a9e}
+body.light[data-accent=steel]{--accent:#3d6a9e;--accent-fill:#3d6a9e}
+body[data-accent=original]{--accent:#4c8dff;--accent-fill:#2f6fea}
+body.light[data-accent=original]{--accent:#2563eb;--accent-fill:#2563eb}
+body{--bg:var(--bg0);--side:var(--side0);--raised:var(--raised0);--hover:var(--hover0);--card:var(--card0);--muted:var(--muted0)}
+body.tint{
+  --bg:color-mix(in srgb,var(--bg0),var(--accent) 5%);--side:color-mix(in srgb,var(--side0),var(--accent) 5%);
+  --raised:color-mix(in srgb,var(--raised0),var(--accent) 7%);--hover:color-mix(in srgb,var(--hover0),var(--accent) 6%);
+  --card:color-mix(in srgb,var(--card0),var(--accent) 6%);--muted:color-mix(in srgb,var(--muted0),var(--accent) 10%)}
+body.light.tint{--bg:var(--bg0);--card:var(--card0);
+  --side:color-mix(in srgb,var(--side0),var(--accent) 3.5%);--raised:color-mix(in srgb,var(--raised0),var(--accent) 5%);
+  --hover:color-mix(in srgb,var(--hover0),var(--accent) 3.5%)}
+body{--soft:color-mix(in srgb,var(--accent) var(--soft-a),transparent)}
 
-
-/* ── Scrollbars ──────────────────────────────────────────────────────────────
-   Defined on html, not body: the viewport scrollbar resolves its colours
-   against the root element, which cannot see the theme variables body.light
-   sets on body — hence the :has() override rather than var(--rule). */
-html{--sb-thumb:#3a3428;--sb-thumb-hover:#5a554e;scrollbar-width:thin;scrollbar-color:var(--sb-thumb) transparent}
-html:has(body.light){--sb-thumb:#d8cfc2;--sb-thumb-hover:#8a7d6e}
+html{scrollbar-width:thin;scrollbar-color:rgba(128,128,128,.35) transparent}
 ::-webkit-scrollbar{width:10px;height:10px}
 ::-webkit-scrollbar-track{background:transparent}
-/* transparent border + padding-box clip insets the thumb without painting a
-   colour, so it sits correctly on the page, menus and the modal alike */
-::-webkit-scrollbar-thumb{background:var(--sb-thumb);border:2px solid transparent;background-clip:padding-box;border-radius:6px}
-::-webkit-scrollbar-thumb:hover{background:var(--sb-thumb-hover)}
-::-webkit-scrollbar-corner{background:transparent}
-html,body{min-height:100%}
-body{background:var(--bg);color:var(--text);font-family:'Libre Baskerville',Georgia,serif;line-height:1.6;transition:background .2s,color .2s}
-.shell{max-width:980px;margin:0 auto;padding:0 2rem}
+::-webkit-scrollbar-thumb{background:rgba(128,128,128,.35);border:2px solid transparent;background-clip:padding-box;border-radius:6px}
+html,body{height:100%}
+body{background:var(--bg);color:var(--text);font:14px/1.45 'Plus Jakarta Sans',system-ui,-apple-system,sans-serif;-webkit-font-smoothing:antialiased;transition:background .2s,color .2s}
+button,input,textarea,select{font:inherit;color:inherit}
+button{cursor:pointer}
+svg{flex-shrink:0}
+:focus-visible{outline:2px solid var(--accent);outline-offset:2px}
+.hidden{display:none!important}
 
-header{display:flex;justify-content:space-between;align-items:center;padding:1.75rem 0;border-bottom:1px solid var(--rule)}
-.wordmark{font-size:1.1rem;font-weight:700;letter-spacing:.04em;color:var(--text)}
-.wordmark span{color:var(--gold);font-weight:400;font-style:italic}
-.header-meta{display:flex;align-items:center;gap:.875rem;flex-wrap:wrap}
-.pill{font-family:'IBM Plex Mono',monospace;font-size:.72rem;font-weight:500;letter-spacing:.06em;color:var(--muted);border:1px solid var(--faint);padding:.3rem .8rem;border-radius:999px;white-space:nowrap}
-.pill.active{color:var(--gold);border-color:var(--gold-dim)}
-.theme-btn{background:none;border:1px solid var(--faint);color:var(--muted);font-family:'IBM Plex Mono',monospace;font-size:.72rem;font-weight:500;letter-spacing:.06em;padding:.3rem .8rem;border-radius:999px;cursor:pointer;white-space:nowrap;transition:color .15s,border-color .15s}
-.theme-btn:hover{color:var(--text);border-color:var(--rule)}
-.hdr-mobile-meta{display:none;align-items:center;gap:.5rem}
-.hdr-icons{display:flex;align-items:center;gap:.05rem}
-.hdr-icon-btn{background:none;border:none;color:var(--muted);font-size:1.6rem;cursor:pointer;padding:.1rem .3rem;line-height:1;display:flex;align-items:center;transition:color .15s;font-family:system-ui,-apple-system,sans-serif}
-.hdr-icon-btn:hover{color:var(--text)}
+/* ── Shell ──────────────────────────────────────────────────────────────────── */
+.app{display:flex;height:100vh;height:100dvh;overflow:hidden}
+.sidebar{width:272px;flex-shrink:0;background:var(--side);box-shadow:1px 0 0 var(--line);display:flex;flex-direction:column;gap:18px;padding:18px 14px 14px;min-height:0;z-index:40;transition:background .2s}
+.main{flex:1;min-width:0;overflow-y:auto;display:flex;flex-direction:column;position:relative}
+#scrim{display:none;position:fixed;inset:0;background:var(--scrim);z-index:35}
 
-.upload-section{padding:2.5rem 0 1.5rem}
-.drop-card{background:var(--surface);border:1px solid var(--rule);border-radius:6px;padding:3rem 2rem;text-align:center;cursor:pointer;transition:border-color .2s,background .2s}
-.drop-card.over{border-color:var(--faint);background:var(--card)}
-.drop-icon{width:40px;height:40px;margin:0 auto 1.25rem;border:1px solid var(--faint);border-radius:4px;display:flex;align-items:center;justify-content:center;font-size:1.1rem;color:var(--muted)}
-.drop-label{font-size:1.2rem;font-weight:400;font-style:italic;color:var(--text);margin-bottom:.4rem}
-.drop-sub{font-family:'IBM Plex Mono',monospace;font-size:.75rem;font-weight:500;letter-spacing:.07em;color:var(--muted)}
-#file-input{display:none}
+.brand{display:flex;align-items:center;gap:10px;padding:0 6px}
+.brand-mark{width:30px;height:30px;border-radius:9px;background:var(--accent-fill);color:#fff;display:flex;align-items:center;justify-content:center}
+.brand-name{font-size:16px;font-weight:700;color:var(--head);letter-spacing:-.01em}
 
-/* compact upload row (mobile) */
-.upload-compact{display:none;align-items:center;gap:1rem;padding:.875rem 1.25rem;background:var(--surface);border:1px solid var(--rule);border-radius:6px;cursor:pointer;transition:border-color .2s,background .2s}
-.upload-compact:active{background:var(--card)}
-.uc-icon{width:42px;height:42px;background:var(--card);border:1px solid var(--faint);border-radius:6px;display:flex;align-items:center;justify-content:center;font-size:1.1rem;color:var(--muted);flex-shrink:0}
-.uc-text{flex:1;min-width:0}
-.uc-title{font-size:.95rem;font-weight:400;font-style:italic;color:var(--text);font-family:'Libre Baskerville',Georgia,serif}
-.uc-sub{font-family:'IBM Plex Mono',monospace;font-size:.68rem;font-weight:500;letter-spacing:.05em;color:var(--muted);margin-top:.15rem}
-.uc-chevron{color:var(--muted);font-size:1.1rem;flex-shrink:0}
-.note-btns{display:flex;gap:.5rem;flex-shrink:0}
+/* ── Buttons ────────────────────────────────────────────────────────────────── */
+.btn,.folder-btn{height:36px;border:none;border-radius:10px;background:var(--side);color:var(--head);font-size:13px;font-weight:600;padding:0 14px;display:inline-flex;align-items:center;justify-content:center;gap:7px;white-space:nowrap;transition:background .15s,filter .15s,transform .1s}
+.btn:hover:not(:disabled),.folder-btn:hover:not(:disabled){background:var(--raised)}
+.btn:active:not(:disabled),.folder-btn:active:not(:disabled){transform:scale(.97)}
+.btn svg,.folder-btn svg{width:16px;height:16px}
+.btn.icon{width:36px;padding:0}
+.btn.ghost{background:transparent}
+.btn.ghost:hover{background:var(--hover)}
+.btn.primary,.folder-btn.primary{background:var(--accent-fill);color:#fff;box-shadow:0 1px 2px rgba(0,0,0,.15)}
+.btn.primary:hover:not(:disabled),.folder-btn.primary:hover:not(:disabled){background:var(--accent-fill);filter:brightness(1.1)}
+.folder-btn.danger{background:color-mix(in srgb,var(--danger) 14%,transparent);color:var(--danger)}
+.folder-btn.danger:hover:not(:disabled){background:color-mix(in srgb,var(--danger) 22%,transparent)}
+.btn:disabled,.folder-btn:disabled{opacity:.45;cursor:default}
+.btn.active{background:var(--soft);color:var(--accent)}
 
-/* progress */
-#progress-wrap{display:none;margin:1.25rem 0 0}
-#bar-track{background:var(--card);height:2px;overflow:hidden;margin-bottom:.5rem}
-#bar{background:var(--gold);height:100%;width:0;transition:width .08s linear}
-#pct{font-family:'IBM Plex Mono',monospace;font-size:.72rem;font-weight:500;color:var(--muted);text-align:right}
-#msg{font-family:'IBM Plex Mono',monospace;font-size:.75rem;font-weight:500;min-height:1.2rem;margin-top:.75rem;letter-spacing:.04em}
-#msg.ok{color:var(--copy-ok)}
-#msg.err{color:#9a5a4a}
+.side-actions{display:flex;flex-direction:column;gap:8px}
+.upload-split{display:flex;gap:6px}
+.upload-split .btn.primary{flex:1;height:40px;font-size:14px;border-radius:11px}
+.sidebar .btn:not(.primary){background:var(--raised)}
+.sidebar .btn:not(.primary):hover{background:color-mix(in srgb,var(--raised),var(--head) 6%)}
+.upload-split .btn.icon{width:40px;height:40px;border-radius:11px}
 
-/* note input */
-.note-wrap{margin-top:1rem}
-.note-field{width:100%;background:var(--note-bg);border:1px solid var(--note-border);border-radius:6px;padding:1rem 1.25rem;display:flex;gap:.75rem;align-items:flex-end}
-#note-input{flex:1;background:none;border:none;outline:none;resize:none;font-family:'Libre Baskerville',Georgia,serif;font-size:.95rem;color:var(--text);line-height:1.6;min-height:2.4rem;max-height:10rem;overflow-y:auto;padding:0}
-#note-input::placeholder{color:var(--muted);font-style:italic}
-.note-divider{display:none;height:1px;background:var(--rule)}
-#paste-btn,#note-submit{background:none;border:1px solid var(--faint);color:var(--muted);font-family:'IBM Plex Mono',monospace;font-size:.72rem;font-weight:500;letter-spacing:.06em;padding:.4rem .9rem;border-radius:4px;cursor:pointer;white-space:nowrap;flex-shrink:0;transition:color .15s,border-color .15s}
-#note-submit:hover{color:var(--gold);border-color:var(--gold-dim)}
+/* ── Sidebar sections ───────────────────────────────────────────────────────── */
+.side-section{display:flex;flex-direction:column;gap:2px;min-height:0}
+.side-title{font-size:11.5px;font-weight:600;color:var(--muted);padding:0 8px 6px;letter-spacing:.02em}
+.side-row,.tree-row{height:32px;border-radius:8px;display:flex;align-items:center;gap:8px;padding:0 8px;color:var(--text);font-weight:500;font-size:13.5px;cursor:pointer;user-select:none;transition:background .12s}
+.side-row:hover,.tree-row:hover{background:var(--hover)}
+.side-row .nm,.tree-row .nm{white-space:nowrap;overflow:hidden;text-overflow:ellipsis;min-width:0}
+.side-row svg,.tree-row .ico svg{width:17px;height:17px}
+.tree-wrap{flex:1;min-height:0;overflow-y:auto;margin:0 -4px;padding:0 4px}
+.tree-row{gap:4px;padding-right:8px}
+.tree-row.active{background:var(--soft);color:var(--accent);font-weight:600}
+.tree-row.drop-target{box-shadow:inset 0 0 0 2px var(--accent)}
+.tree-chev{width:20px;height:20px;border:none;background:none;color:var(--muted);display:flex;align-items:center;justify-content:center;border-radius:5px;flex-shrink:0}
+.tree-chev:hover{background:var(--raised)}
+.tree-chev svg{width:13px;height:13px;transition:transform .15s}
+.tree-chev.open svg{transform:rotate(90deg)}
+.tree-chev.leaf{visibility:hidden}
+.tree-row .ico{color:var(--c-folder);display:flex;margin-right:4px}
+.side-empty{font-size:12.5px;color:var(--muted);padding:2px 8px}
+.side-foot{display:flex;flex-direction:column;gap:8px;padding:10px 8px 0}
+#disk-bar-track{height:5px;border-radius:3px;background:var(--raised);overflow:hidden}
+#disk-bar-fill{height:100%;border-radius:3px;background:var(--accent);transition:width .3s}
+.disk-meta{display:flex;flex-direction:column;gap:2px;font-size:12px;color:var(--muted)}
+.disk-meta span{white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
 
-/* divider */
-.divider{display:flex;align-items:center;gap:1rem;margin:1.5rem 0}
-.divider-line{flex:1;height:1px;background:var(--rule)}
-.divider-text{font-family:'IBM Plex Mono',monospace;font-size:.7rem;font-weight:500;letter-spacing:.1em;color:var(--muted);white-space:nowrap}
-.breadcrumb{display:none;align-items:center;gap:.3rem;margin-bottom:.75rem;flex-wrap:wrap}
-.bc-item{font-family:'IBM Plex Mono',monospace;font-size:.72rem;font-weight:500;color:var(--muted);cursor:pointer;transition:color .15s}
-.bc-item:hover{color:var(--text)}
-.bc-root{color:var(--muted)}
-.bc-current{color:var(--text);cursor:default}
-.bc-sep{font-family:'IBM Plex Mono',monospace;font-size:.72rem;color:var(--faint)}
-.ft-dir{background:var(--card);font-family:'IBM Plex Mono',monospace;font-size:.65rem;font-weight:500;letter-spacing:.06em;color:var(--gold);border-color:var(--gold-dim)}
-.dir-item:hover .dir-name{opacity:.8}
-
-/* file/note list */
-.file-list{display:flex;flex-direction:column}
-
-.file-item:hover{background:var(--surface)}
-.file-item+.file-item{border-top:1px solid var(--faint)}
-
-/* note item overrides — no thumb column, spans full row */
-.note-item{display:grid;grid-template-columns:1fr auto auto;align-items:center;gap:1.25rem;padding:1rem 1.25rem;border-radius:5px;background:var(--note-bg);border:1px solid var(--note-border);margin:.25rem 0;transition:background .15s;position:relative}
-.note-item:hover{background:var(--card)}
-.note-snippet{font-family:'Libre Baskerville',Georgia,serif;font-size:.95rem;color:var(--text);line-height:1.5;word-break:break-word}
-/* Collapsed to a few lines so a long note does not stretch the row. The full
-   text is still in the DOM — it has to be, or editing and saving would write
-   back a truncated file — this only limits how much is shown. */
-.note-snippet{cursor:text;display:-webkit-box;-webkit-line-clamp:3;-webkit-box-orient:vertical;overflow:hidden}
-/* editing expands it, scrolling past a sensible height rather than growing forever */
-.note-snippet.editing{display:block;-webkit-line-clamp:none;white-space:pre-wrap;min-height:1.4em;max-height:16rem;overflow:auto}
-.note-item .save-btn{color:var(--gold)}
-.note-item .cancel-btn{color:var(--muted)}
-.note-meta{font-family:'IBM Plex Mono',monospace;font-size:.68rem;font-weight:500;color:var(--muted);margin-top:.2rem;letter-spacing:.04em}
-.note-actions{display:flex;align-items:center;gap:.5rem;flex-shrink:0}
-
-.file-thumb{width:50px;height:50px;border-radius:5px;border:1px solid var(--faint);flex-shrink:0;display:flex;align-items:center;justify-content:center;overflow:hidden}
-.file-thumb img{width:100%;height:100%;object-fit:cover;display:block}
-.vid-thumb{width:100%;height:100%;object-fit:cover;display:block}
-/* "preparing for playback" state while ffmpeg repackages the container */
-.prep{display:flex;flex-direction:column;align-items:center;justify-content:center;gap:.8rem;padding:2.5rem 1.5rem;min-width:260px}
-.prep-spin{width:26px;height:26px;border:2px solid var(--faint);border-top-color:var(--gold);border-radius:50%;animation:prep-rot .8s linear infinite}
-@keyframes prep-rot{to{transform:rotate(360deg)}}
-.prep-msg{font-family:'IBM Plex Mono',monospace;font-size:.8rem;font-weight:500;color:var(--text);text-align:center}
-.prep-sub{font-family:'IBM Plex Mono',monospace;font-size:.7rem;color:var(--muted);text-align:center}
-.ft-pdf{background:var(--card);font-family:'IBM Plex Mono',monospace;font-size:.65rem;font-weight:500;letter-spacing:.06em;color:#6b5c3e;border-color:var(--faint)}
-.ft-vid{background:var(--card);font-family:'IBM Plex Mono',monospace;font-size:.65rem;font-weight:500;letter-spacing:.06em;color:#5a4e6b;border-color:var(--faint)}
-.ft-aud{background:var(--card);font-family:'IBM Plex Mono',monospace;font-size:.65rem;font-weight:500;letter-spacing:.06em;color:#3e6b56;border-color:var(--faint)}
-.ft-arc{background:var(--card);font-family:'IBM Plex Mono',monospace;font-size:.65rem;font-weight:500;letter-spacing:.06em;color:#5a5a3e;border-color:var(--faint)}
-.ft-file{background:var(--card);font-family:'IBM Plex Mono',monospace;font-size:.65rem;font-weight:500;letter-spacing:.06em;color:var(--muted);border-color:var(--faint)}
-
-.file-info-col{cursor:pointer}
-.file-name{font-size:1.05rem;font-weight:400;color:var(--text);line-height:1.3;word-break:break-all;transition:color .15s}
-.file-info-col:hover .file-name{color:var(--gold)}
-.file-name-ext{color:var(--muted)}
-.file-type-date{font-family:'IBM Plex Mono',monospace;font-size:.72rem;font-weight:500;letter-spacing:.04em;color:var(--muted);margin-top:.2rem}
-.file-size{font-family:'IBM Plex Mono',monospace;font-size:.8rem;font-weight:400;color:var(--muted);white-space:nowrap;min-width:58px;text-align:right;opacity:.6}
-.file-item{display:grid;grid-template-columns:52px 1fr auto;align-items:center;gap:1.25rem;padding:1rem;border-radius:5px;transition:background .15s;margin:0 -1rem;position:relative}
-.dir-item{grid-template-columns:52px 1fr auto}
-.file-actions{display:flex;align-items:center;gap:.4rem}
-.action-sep{width:1px;height:1rem;background:var(--rule);flex-shrink:0;margin:0 .15rem}
-.view-btn,.dl-btn,.copy-btn,.menu-btn{background:none;border:none;padding:.25rem .15rem;cursor:pointer;font-family:'IBM Plex Mono',monospace;font-size:1.05rem;font-weight:500;letter-spacing:.05em;white-space:nowrap;transition:color .15s}
-.view-btn{color:var(--muted);font-size:.82rem}.view-btn:hover{color:var(--text)}
-.dl-btn{color:var(--muted)}.dl-btn:hover{color:var(--gold)}
-.copy-btn{color:var(--muted)}.copy-btn:hover{color:var(--text)}
-.copy-btn.copied{color:var(--copy-ok)}
-.menu-btn{display:none;color:var(--muted);font-size:1.1rem;padding:.2rem .5rem;letter-spacing:0;line-height:1}
-.menu-btn:hover{color:var(--text)}
-
-.folder-row{display:flex;align-items:center;gap:.75rem;margin-bottom:.75rem;justify-content:flex-start}
-.folder-left{display:flex;align-items:center;gap:.75rem;flex:1;min-width:0}
-.btn-lbl{font-size:.68rem;letter-spacing:.04em}
-
-#disk-bar-wrap{display:flex;align-items:center;gap:.6rem}
-#disk-bar-track{width:80px;height:3px;background:var(--faint);border-radius:2px;overflow:hidden}
-#disk-bar-fill{height:100%;background:var(--gold);border-radius:2px;transition:width .3s}
-#disk-label{font-family:'IBM Plex Mono',monospace;font-size:.68rem;color:var(--muted)}
-
-.empty-state{padding:2rem 1rem;font-family:'IBM Plex Mono',monospace;font-size:.75rem;font-weight:500;color:var(--muted);letter-spacing:.06em;text-align:center}
-
-footer{padding:1.75rem 0;border-top:1px solid var(--rule);margin-top:2rem;display:flex;justify-content:space-between;align-items:center;gap:1rem}
-.ft-l{font-family:'IBM Plex Mono',monospace;font-size:.7rem;font-weight:500;letter-spacing:.07em;color:var(--muted)}
-.ft-r{font-family:'IBM Plex Mono',monospace;font-size:.7rem;letter-spacing:.05em;color:var(--muted);opacity:.5;word-break:break-all}
-
-/* search */
-.search-wrap{margin-top:1rem}
-.search-field{display:flex;align-items:center;background:var(--surface);border:1px solid var(--rule);border-radius:6px;padding:.5rem 1rem;gap:.5rem}
-.search-icon{color:var(--muted);font-size:.9rem;flex-shrink:0}
-#search-input{flex:1;background:none;border:none;outline:none;font-family:'IBM Plex Mono',monospace;font-size:.82rem;color:var(--text);min-width:0}
+/* ── Top bar ────────────────────────────────────────────────────────────────── */
+.topbar{position:sticky;top:0;z-index:20;height:64px;flex-shrink:0;display:flex;align-items:center;gap:16px;padding:0 24px 0 28px;background:color-mix(in srgb,var(--bg) 88%,transparent);backdrop-filter:blur(10px)}
+#menu-toggle{display:none}
+.breadcrumb{display:flex;align-items:center;gap:4px;font-size:13.5px;min-width:0;flex:1 1 0;overflow:hidden}
+.bc-item{color:var(--muted);font-weight:500;cursor:pointer;padding:3px 6px;border-radius:6px;white-space:nowrap;transition:background .12s,color .12s}
+.bc-item:hover{background:var(--hover);color:var(--text)}
+.bc-current{color:var(--head);font-weight:600;cursor:default;overflow:hidden;text-overflow:ellipsis}
+.bc-current:hover{background:none;color:var(--head)}
+.bc-sep{color:var(--muted);display:flex}
+.bc-sep svg{width:14px;height:14px}
+.bc-item.drop-target{box-shadow:inset 0 0 0 2px var(--accent);color:var(--accent)}
+.cmd{position:relative;width:460px;max-width:42vw;height:38px;border-radius:11px;background:var(--side);display:flex;align-items:center;gap:10px;padding:0 8px 0 14px;flex-shrink:1}
+.cmd>svg{width:16px;height:16px;color:var(--muted)}
+#search-input{flex:1;min-width:0;border:none;outline:none;background:transparent;font-size:13.5px}
 #search-input::placeholder{color:var(--muted)}
-#search-clear{background:none;border:none;color:var(--muted);cursor:pointer;font-size:1rem;padding:0 .25rem;line-height:1;flex-shrink:0;transition:color .15s}
-#search-clear:hover{color:var(--text)}
-.search-snippet{font-family:'IBM Plex Mono',monospace;font-size:.7rem;color:var(--muted);margin-top:.2rem;white-space:nowrap;overflow:hidden;text-overflow:ellipsis;max-width:100%;opacity:.8}
+#search-input::-webkit-search-cancel-button{display:none}
+#search-clear{border:none;background:none;color:var(--muted);width:24px;height:24px;border-radius:6px;display:flex;align-items:center;justify-content:center}
+#search-clear:hover{background:var(--raised);color:var(--text)}
+.kbd{font-size:11.5px;font-weight:600;color:var(--muted);background:var(--bg);border-radius:6px;padding:3px 7px;box-shadow:var(--btn-shadow);white-space:nowrap}
+#search-close{display:none}
+.top-actions{display:flex;align-items:center;gap:4px;flex:1 1 0;justify-content:flex-end}
+.top-actions .btn svg{width:18px;height:18px}
+#cmd-menu{display:none;position:absolute;left:0;right:0;top:calc(100% + 6px);background:var(--card);border-radius:12px;box-shadow:var(--shadow-lg);padding:6px;z-index:60}
+#cmd-menu.open{display:block}
+.cmd-head{font-size:11.5px;font-weight:600;color:var(--muted);padding:6px 10px 4px}
+.cmd-item{width:100%;display:flex;align-items:center;gap:10px;border:none;background:none;border-radius:8px;padding:8px 10px;text-align:left;font-size:13.5px;font-weight:500;color:var(--text)}
+.cmd-item svg{width:16px;height:16px;color:var(--muted)}
+.cmd-item.on,.cmd-item:hover{background:var(--hover);color:var(--head)}
+.cmd-item.on svg{color:var(--accent)}
+.cmd-item .hint{margin-left:auto;font-size:12px;color:var(--muted)}
 
-/* ⋮ row menu */
-.row-menu{position:absolute;right:0;top:calc(100% + 2px);z-index:50;background:var(--card);border:1px solid var(--faint);border-radius:6px;min-width:150px;overflow:hidden;box-shadow:0 4px 16px rgba(0,0,0,.35)}
-.row-menu-item{display:flex;align-items:center;gap:.6rem;padding:.65rem 1rem;font-family:'IBM Plex Mono',monospace;font-size:.78rem;font-weight:500;color:var(--muted);cursor:pointer;white-space:nowrap;background:none;border:none;width:100%;text-align:left;transition:background .1s,color .1s}
-.row-menu-item:hover{background:var(--faint);color:var(--text)}
-/* right-click menu: same card as .row-menu, but pinned to the pointer */
-.ctx-menu{position:fixed;right:auto;top:auto;z-index:120;min-width:170px}
-.row-menu-item:disabled{opacity:.35;cursor:default}
-.row-menu-item.danger{color:#9a5a4a}
-.row-menu-item.danger:hover{background:rgba(154,90,74,.12);color:#c06050}
-.ctx-sep{height:1px;background:var(--rule);margin:.25rem 0}
-
-/* bulk delete */
-.row-check{display:flex;align-items:center;justify-content:center}
-.row-check input[type=checkbox]{width:15px;height:15px;accent-color:var(--gold);cursor:pointer;flex-shrink:0}
-#select-trigger{display:none;color:#9a5a4a;background:none;border:none;cursor:pointer;padding:.1rem .15rem;line-height:1;margin-left:auto;transition:color .15s}
-#select-trigger:hover{color:#c06050}
-
-/* extension filter */
-.ext-filter{position:relative;flex-shrink:0}
-#ext-btn{display:flex;align-items:center;gap:.45rem;background:none;border:1px solid var(--faint);border-radius:4px;color:var(--muted);cursor:pointer;font-family:'IBM Plex Mono',monospace;font-size:.7rem;font-weight:500;letter-spacing:.08em;padding:.35rem .6rem;line-height:1;transition:color .15s,border-color .15s}
-#ext-btn:hover{color:var(--text);border-color:#3a3530}
-#ext-btn.active{color:var(--gold);border-color:var(--gold-dim)}
-#ext-btn:disabled{opacity:.45;cursor:default}
-#ext-btn:disabled:hover{color:var(--muted);border-color:var(--faint)}
-.ext-caret{font-size:.55rem;line-height:1;opacity:.8}
-.ext-menu{display:none;position:absolute;left:0;top:calc(100% + 4px);z-index:50;background:var(--card);border:1px solid var(--faint);border-radius:6px;min-width:150px;max-height:15rem;overflow-y:auto;box-shadow:0 4px 16px rgba(0,0,0,.35)}
+/* ── Folder header ──────────────────────────────────────────────────────────── */
+.content{flex:1;display:flex;flex-direction:column;padding:6px 32px 32px;min-width:0}
+.folder-head{display:flex;align-items:flex-end;justify-content:space-between;gap:16px;padding:8px 0 18px;flex-wrap:wrap}
+#folder-title{font-size:28px;font-weight:700;color:var(--head);letter-spacing:-.02em;line-height:1.2;word-break:break-word}
+.folder-meta{font-size:13px;color:var(--muted);margin-top:4px}
+.folder-actions{display:flex;align-items:center;gap:8px;flex-wrap:wrap}
+.seg{display:flex;gap:2px;padding:3px;border-radius:11px;background:var(--side)}
+.seg button{height:30px;min-width:34px;border:none;border-radius:8px;background:transparent;color:var(--muted);display:flex;align-items:center;justify-content:center;gap:6px;padding:0 8px;font-size:13px;font-weight:600;transition:background .15s,color .15s}
+.seg button svg{width:16px;height:16px}
+.seg button.on{background:var(--card);color:var(--head);box-shadow:var(--btn-shadow)}
+body.light .seg button.on{background:#fff}
+.ext-filter{position:relative}
+.ext-caret{width:12px;height:12px;opacity:.7}
+#ext-btn.active{background:var(--soft);color:var(--accent)}
+.ext-menu{display:none;position:absolute;left:0;top:calc(100% + 6px);z-index:50;background:var(--card);border-radius:12px;min-width:180px;max-height:18rem;overflow-y:auto;box-shadow:var(--shadow-lg);padding:6px}
 .ext-menu.open{display:block}
-.ext-item{display:flex;align-items:center;justify-content:space-between;gap:1.25rem;padding:.55rem .9rem;font-family:'IBM Plex Mono',monospace;font-size:.75rem;font-weight:500;color:var(--muted);cursor:pointer;white-space:nowrap;background:none;border:none;width:100%;text-align:left;transition:background .1s,color .1s}
-.ext-item:hover{background:var(--faint);color:var(--text)}
-.ext-item.sel{color:var(--gold)}
-.ext-count{font-size:.68rem;opacity:.65}
-/* selection toolbar: sits directly above the list rather than pinned to the
-   bottom, so the actions are next to what they act on */
-/* shared-folder banner: QR first, then the link to copy */
-#share-banner{display:none;flex-direction:column;align-items:center;gap:.5rem;padding:1.1rem;margin-bottom:.9rem;background:var(--surface);border:1px solid var(--rule);border-radius:6px}
-.share-qr{width:150px;height:150px;image-rendering:pixelated;background:#fff;padding:6px;border-radius:4px}
-.share-copy{font-family:'IBM Plex Mono',monospace;font-size:.75rem;font-weight:500;color:var(--gold);text-decoration:underline;cursor:pointer}
-.share-copy:hover{opacity:.8}
-.share-url{font-family:'IBM Plex Mono',monospace;font-size:.68rem;color:var(--muted);word-break:break-all;text-align:center}
-#select-bar{display:none;align-items:center;justify-content:space-between;gap:1rem;flex-wrap:wrap;background:var(--surface);border:1px solid var(--rule);border-radius:6px;padding:.65rem .8rem;margin-bottom:.75rem}
+.ext-item{display:flex;align-items:center;justify-content:space-between;gap:1.25rem;width:100%;border:none;background:none;border-radius:8px;padding:8px 10px;font-size:13px;font-weight:500;color:var(--text);text-align:left}
+.ext-item:hover{background:var(--hover)}
+.ext-item.sel{color:var(--accent);font-weight:600}
+.ext-count{font-size:12px;color:var(--muted)}
+
+/* ── Pinned strip (phone) ───────────────────────────────────────────────────── */
+.pin-strip{display:none;gap:8px;overflow-x:auto;padding:0 0 14px;scrollbar-width:none}
+.pin-strip::-webkit-scrollbar{display:none}
+.pin-chip{display:flex;align-items:center;gap:8px;height:38px;padding:0 14px 0 10px;border-radius:12px;background:var(--side);border:none;font-size:13px;font-weight:600;color:var(--head);white-space:nowrap;flex-shrink:0}
+.pin-chip svg{width:17px;height:17px}
+
+/* ── Share banner & selection bar ───────────────────────────────────────────── */
+#share-banner{display:none;align-items:center;gap:18px;padding:16px;margin-bottom:18px;background:var(--side);border-radius:14px}
+.share-qr{width:112px;height:112px;image-rendering:pixelated;background:#fff;padding:6px;border-radius:10px;flex-shrink:0}
+.share-info{display:flex;flex-direction:column;gap:8px;min-width:0}
+.share-title{font-size:14px;font-weight:700;color:var(--head)}
+.share-url{font-size:12.5px;color:var(--muted);word-break:break-all}
+.share-links{display:flex;gap:8px;flex-wrap:wrap}
+#select-bar{display:none;align-items:center;justify-content:space-between;gap:12px;flex-wrap:wrap;background:var(--soft);border-radius:14px;padding:10px 12px 10px 16px;margin-bottom:14px;position:sticky;top:72px;z-index:15;backdrop-filter:blur(10px)}
 #select-bar.open{display:flex}
-#select-bar-count{font-family:'IBM Plex Mono',monospace;font-size:.75rem;font-weight:500;color:var(--gold);letter-spacing:.04em;white-space:nowrap}
-#select-bar-actions{display:flex;gap:.5rem;flex-wrap:wrap;align-items:center}
-#select-bar-actions .folder-btn{padding:.35rem .75rem;font-size:.72rem}
-.sb-div{width:1px;height:1.1rem;background:var(--rule)}
-/* everything except the list and its toolbar recedes while selecting */
-body.selecting header,
-body.selecting .upload-section,
-body.selecting .search-wrap,
-body.selecting .divider,
-body.selecting .breadcrumb,
-body.selecting .folder-row,
-body.selecting footer{opacity:.22;pointer-events:none;transition:opacity .18s}
-body.selecting .file-list,body.selecting #select-bar{opacity:1}
-#select-bar-count{font-family:'IBM Plex Mono',monospace;font-size:.78rem;font-weight:500;color:var(--muted);letter-spacing:.04em}
-#select-bar-actions{display:flex;gap:.75rem}
-/* .folder-btn had no rule at all — these buttons were falling through to the
-   browser's default grey chrome, which is why they looked undesigned. */
-.folder-btn{font-family:'IBM Plex Mono',monospace;font-size:.75rem;font-weight:500;letter-spacing:.06em;color:var(--muted);background:none;border:1px solid var(--faint);padding:.45rem 1rem;border-radius:4px;cursor:pointer;white-space:nowrap;transition:color .15s,border-color .15s,background .15s}
-.folder-btn:hover:not(:disabled){color:var(--text);border-color:var(--rule)}
-.folder-btn:disabled{opacity:.4;cursor:default}
-.folder-btn.danger{color:#9a5a4a;border-color:#3a2622}
-.folder-btn.danger:hover:not(:disabled){color:#c06050;border-color:#9a5a4a;background:rgba(154,90,74,.08)}
-.folder-btn.primary{color:var(--gold);border-color:var(--gold-dim)}
-.folder-btn.primary:hover:not(:disabled){color:var(--gold);border-color:var(--gold);background:rgba(154,125,74,.1)}
+#select-bar-count{font-size:13.5px;font-weight:700;color:var(--accent)}
+#select-bar-actions{display:flex;gap:6px;flex-wrap:wrap;align-items:center}
+#select-bar .folder-btn:not(.primary):not(.danger){background:var(--card)}
+.sb-div{width:1px;height:20px;background:var(--line)}
 
-/* new folder */
-#newfolder-btn,#share-btn{display:flex;align-items:center;gap:.4rem;flex-shrink:0;background:none;border:1px solid var(--faint);border-radius:4px;color:var(--muted);cursor:pointer;font-family:'IBM Plex Mono',monospace;font-size:.7rem;font-weight:500;letter-spacing:.08em;padding:.35rem .6rem;line-height:1;transition:color .15s,border-color .15s}
-#newfolder-btn:hover,#share-btn:hover{color:var(--gold);border-color:var(--gold-dim)}
-.nf-plus{font-size:.9rem;line-height:1}
-
-/* name prompt */
-
-/* drag to move */
+/* ── File list ──────────────────────────────────────────────────────────────── */
+.list-head{display:flex;align-items:center;gap:14px;padding:0 12px 8px;font-size:12px;font-weight:600;color:var(--muted)}
+.list-head .lh-name{flex:1}
+.file-list{display:flex;flex-direction:column;margin:0 -12px}
+.file-item,.note-item{display:flex;align-items:center;gap:14px;padding:9px 12px;border-radius:12px;position:relative;transition:background .12s,transform .15s,box-shadow .15s}
+.file-item:hover,.note-item:hover{background:var(--hover)}
+.k-folder{--k:var(--c-folder)}.k-image{--k:var(--c-image)}.k-video{--k:var(--c-video)}.k-audio{--k:var(--c-audio)}.k-pdf{--k:var(--c-pdf)}.k-doc{--k:var(--c-doc)}.k-note{--k:var(--c-note)}.k-archive{--k:var(--c-archive)}.k-code{--k:var(--c-code)}.k-lock{--k:var(--muted)}
+.ft-tile{width:40px;height:40px;border-radius:10px;display:flex;align-items:center;justify-content:center;overflow:hidden;flex-shrink:0;position:relative;background:color-mix(in srgb,var(--k) var(--tile-a),transparent);color:var(--k)}
+.ft-tile svg{width:20px;height:20px}
+.ft-tile img{position:absolute;inset:0;width:100%;height:100%;object-fit:cover;display:block}
+.ft-play{position:absolute;width:22px;height:22px;border-radius:11px;background:rgba(0,0,0,.55);color:#fff;display:none;align-items:center;justify-content:center}
+.ft-play svg{width:10px;height:10px}
+.file-info-col,.note-body{flex:1;min-width:0;cursor:pointer}
+.file-name{font-size:14px;font-weight:600;color:var(--head);white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
+.file-name-ext{color:var(--muted);font-weight:500}
+body.hide-ext .file-name-ext{display:none}
+.pin-ico{display:inline-flex;vertical-align:-1px;margin-left:6px;color:var(--accent)}
+.pin-ico svg{width:12px;height:12px}
+.file-type-date,.note-meta{font-size:12.5px;color:var(--muted);margin-top:2px;white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
+.meta-grid{display:none}
+.col-size{width:96px;text-align:right;font-size:13px;color:var(--muted);flex-shrink:0}
+.col-date{width:132px;padding-left:24px;font-size:13px;color:var(--muted);flex-shrink:0;white-space:nowrap}
+.file-actions{width:112px;flex-shrink:0;display:flex;justify-content:flex-end;gap:3px;opacity:0;transition:opacity .12s;position:relative}
+.file-item:hover .file-actions,.note-item:hover .file-actions,.file-actions:focus-within,.file-actions.menu-open{opacity:1}
+.act{width:32px;height:32px;border:none;border-radius:8px;background:var(--bg);box-shadow:var(--btn-shadow);color:var(--text);display:inline-flex;align-items:center;justify-content:center;transition:color .12s,background .12s}
+.act svg{width:16px;height:16px}
+.act:hover{color:var(--accent)}
+.act.copied{color:var(--ok)}
+.act.save-btn{color:var(--ok)}
+.search-snippet{font-size:12px;color:var(--muted);margin-top:2px;white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
+.note-snippet{font-size:14px;font-weight:500;color:var(--head);line-height:1.45;word-break:break-word;cursor:text;display:-webkit-box;-webkit-line-clamp:2;-webkit-box-orient:vertical;overflow:hidden}
+.note-snippet.editing{display:block;-webkit-line-clamp:none;white-space:pre-wrap;min-height:1.4em;max-height:16rem;overflow:auto;outline:none;background:var(--bg);border-radius:8px;padding:6px 8px;margin:-6px -8px;box-shadow:inset 0 0 0 2px var(--accent)}
+.note-item.editing-row .file-actions{opacity:1}
+.row-check{display:flex;align-items:center;justify-content:center;flex-shrink:0}
+.row-check input{width:18px;height:18px;accent-color:var(--accent);cursor:pointer}
+.locked-row{opacity:.55;cursor:pointer}
+.locked-row:hover{opacity:.8}
+.file-item.is-locked .file-name::after{content:'';display:inline-block;width:7px;height:7px;border-radius:4px;background:var(--muted);margin-left:8px;vertical-align:2px}
 .file-item.dragging,.note-item.dragging{opacity:.4}
-.file-item.drop-target,.note-item.drop-target{outline:1px dashed var(--gold);outline-offset:-2px;background:rgba(154,125,74,.08)}
-.bc-item.drop-target{outline:1px dashed var(--gold);border-radius:3px;color:var(--gold)}
+.file-item.drop-target,.note-item.drop-target{box-shadow:inset 0 0 0 2px var(--accent);background:var(--soft)}
+.empty-state{padding:56px 16px;text-align:center;color:var(--muted);font-size:14px}
+.empty-state b{display:block;font-size:16px;color:var(--head);margin-bottom:4px}
+.drop-hint{margin-top:auto;padding:28px 0 6px;display:flex;justify-content:center;align-items:center;gap:8px;font-size:12.5px;color:var(--muted)}
+.drop-hint svg{width:15px;height:15px}
+body.compact .file-item,body.compact .note-item{padding-top:5px;padding-bottom:5px}
+body.compact .ft-tile{width:32px;height:32px;border-radius:8px}
+body.compact .ft-tile svg{width:17px;height:17px}
 
-/* confirm dialog — above every other layer, since it gates a destructive action */
-#confirm-modal{display:none;position:fixed;inset:0;background:rgba(0,0,0,.78);z-index:130;align-items:center;justify-content:center;padding:1.5rem}
-#confirm-modal.open{display:flex}
-#confirm-box{background:var(--card);border:1px solid var(--faint);border-radius:8px;padding:1.5rem;width:100%;max-width:360px}
-#confirm-title{font-family:'IBM Plex Mono',monospace;font-size:.72rem;font-weight:500;letter-spacing:.12em;color:var(--muted);margin-bottom:.9rem}
-#confirm-text{font-family:'Libre Baskerville',Georgia,serif;font-size:.9rem;color:var(--text);line-height:1.55;word-break:break-word}
-#confirm-text b{font-family:'IBM Plex Mono',monospace;font-size:.82rem;font-weight:500;color:var(--gold)}
-.confirm-name{font-family:'IBM Plex Mono',monospace;font-size:.82rem;font-weight:500;color:var(--gold);background:var(--bg);border:1px solid var(--faint);border-radius:4px;padding:.5rem .7rem;margin-top:.7rem;word-break:break-all}
-#confirm-note{font-family:'IBM Plex Mono',monospace;font-size:.7rem;color:var(--muted);margin-top:.6rem}
-#confirm-actions{display:flex;justify-content:flex-end;gap:.75rem;margin-top:1.4rem}
-/* move picker */
-#move-modal{display:none;position:fixed;inset:0;background:rgba(0,0,0,.75);z-index:110;align-items:center;justify-content:center;padding:1.5rem}
-#move-modal.open{display:flex}
-#move-box{background:var(--card);border:1px solid var(--faint);border-radius:8px;padding:1.5rem;width:100%;max-width:400px;display:flex;flex-direction:column}
-#move-title{font-family:'IBM Plex Mono',monospace;font-size:.72rem;font-weight:500;letter-spacing:.12em;color:var(--muted);margin-bottom:.9rem}
-#move-title span{color:var(--text)}
-#move-crumb{display:flex;align-items:center;flex-wrap:wrap;gap:.3rem;font-family:'IBM Plex Mono',monospace;font-size:.75rem;color:var(--muted);margin-bottom:.6rem}
-.mc-item{cursor:pointer;transition:color .15s}
-.mc-item:hover{color:var(--gold)}
-.mc-sep{opacity:.4}
-#move-list{border:1px solid var(--faint);border-radius:4px;min-height:8rem;max-height:14rem;overflow-y:auto;background:var(--bg)}
-.move-row{display:block;width:100%;text-align:left;background:none;border:none;border-bottom:1px solid var(--rule);color:var(--text);font-family:'IBM Plex Mono',monospace;font-size:.78rem;padding:.6rem .85rem;cursor:pointer;transition:background .1s,color .1s}
-.move-row:last-child{border-bottom:none}
-.move-row:hover:not(.disabled){background:var(--faint);color:var(--gold)}
-.move-row::before{content:'\002B22';margin-right:.5rem;opacity:.5}
-.move-row.disabled{opacity:.35;cursor:default}
-.move-empty{font-family:'IBM Plex Mono',monospace;font-size:.75rem;color:var(--muted);padding:.9rem}
-#move-actions{display:flex;justify-content:flex-end;gap:.75rem;margin-top:1.25rem}
-/* locked rows: visibly inert until unlocked */
-.locked-row{opacity:.42;cursor:pointer;transition:opacity .15s}
-.locked-row:hover{opacity:.62}
-.file-item.is-locked{opacity:.72}
-.ft-lock{background:var(--card);font-size:1.1rem}
-/* password dialog */
-#pw-modal{display:none;position:fixed;inset:0;background:rgba(0,0,0,.78);z-index:135;align-items:center;justify-content:center;padding:1.5rem}
-#pw-modal.open{display:flex}
-#pw-box{background:var(--card);border:1px solid var(--faint);border-radius:8px;padding:1.5rem;width:100%;max-width:340px}
-#pw-title{font-family:'IBM Plex Mono',monospace;font-size:.72rem;font-weight:500;letter-spacing:.12em;text-transform:uppercase;color:var(--muted);margin-bottom:.5rem}
-#pw-sub{font-family:'IBM Plex Mono',monospace;font-size:.8rem;color:var(--gold);margin-bottom:1rem;word-break:break-all}
-#pw-input{width:100%;padding:.7rem .9rem;background:var(--bg);border:1px solid var(--faint);border-radius:4px;color:var(--text);font-family:'IBM Plex Mono',monospace;font-size:.85rem;outline:none;transition:border-color .15s}
-#pw-input:focus{border-color:var(--gold-dim)}
-#pw-err{font-family:'IBM Plex Mono',monospace;font-size:.7rem;font-weight:500;color:#9a5a4a;margin-top:.6rem;display:none}
-#pw-actions{display:flex;justify-content:flex-end;gap:.75rem;margin-top:1.25rem}
-#prompt-modal{display:none;position:fixed;inset:0;background:rgba(0,0,0,.75);z-index:110;align-items:center;justify-content:center;padding:1.5rem}
-#prompt-modal.open{display:flex}
-#prompt-box{background:var(--card);border:1px solid var(--faint);border-radius:8px;padding:1.5rem;width:100%;max-width:340px}
-#prompt-title{font-family:'IBM Plex Mono',monospace;font-size:.72rem;font-weight:500;letter-spacing:.12em;color:var(--muted);margin-bottom:1rem}
-#prompt-input{width:100%;padding:.7rem .9rem;background:var(--bg);border:1px solid var(--faint);border-radius:4px;color:var(--text);font-family:'IBM Plex Mono',monospace;font-size:.85rem;outline:none;transition:border-color .15s}
-#prompt-input:focus{border-color:var(--gold-dim)}
-#prompt-input::placeholder{color:var(--muted)}
-#prompt-err{font-family:'IBM Plex Mono',monospace;font-size:.7rem;font-weight:500;color:#9a5a4a;letter-spacing:.04em;margin-top:.6rem;display:none}
-#prompt-actions{display:flex;justify-content:flex-end;gap:.75rem;margin-top:1.25rem}
+/* grid view */
+.file-list.grid{display:grid;grid-template-columns:repeat(auto-fill,minmax(184px,1fr));gap:16px;margin:0}
+.file-list.grid .file-item,.file-list.grid .note-item{flex-direction:column;align-items:stretch;gap:10px;padding:8px;border-radius:14px;background:var(--card);box-shadow:var(--shadow)}
+.file-list.grid .file-item:hover,.file-list.grid .note-item:hover{transform:translateY(-2px);box-shadow:var(--shadow-lg)}
+.file-list.grid .ft-tile{width:auto;height:128px;border-radius:10px}
+.file-list.grid .ft-tile svg{width:40px;height:40px}
+.file-list.grid .ft-play{display:flex;width:34px;height:34px;border-radius:17px}
+.file-list.grid .ft-play svg{width:14px;height:14px}
+.file-list.grid .file-info-col,.file-list.grid .note-body{padding:0 4px 4px}
+.file-list.grid .col-size,.file-list.grid .col-date,.file-list.grid .meta-list{display:none}
+.file-list.grid .meta-grid{display:inline}
+.file-list.grid .file-actions{position:absolute;top:14px;right:14px;width:auto}
+.file-list.grid .row-check{position:absolute;top:14px;left:14px;z-index:2;background:var(--card);border-radius:6px;padding:3px}
+.file-list.grid .note-snippet{font-size:13.5px}
+body.compact .file-list.grid{grid-template-columns:repeat(auto-fill,minmax(150px,1fr))}
+body.compact .file-list.grid .ft-tile{height:100px}
 
-/* desktop: show Delete trigger + select mode grids */
-@media (min-width:641px){
-  #select-trigger{display:flex;align-items:center}
-  .file-list.selecting .file-item:not(.dir-item){grid-template-columns:20px 52px 1fr auto}
-  .file-list.selecting .dir-item{grid-template-columns:20px 52px 1fr auto}
-  .file-list.selecting .note-item{grid-template-columns:20px 1fr auto auto}
+/* ── Menus ──────────────────────────────────────────────────────────────────── */
+.row-menu{position:absolute;right:0;top:calc(100% + 4px);z-index:50;background:var(--card);border-radius:12px;min-width:180px;box-shadow:var(--shadow-lg);padding:6px}
+.ctx-menu{position:fixed;right:auto;top:auto;z-index:120}
+.row-menu-item{display:flex;align-items:center;width:100%;border:none;background:none;border-radius:8px;padding:8px 10px;font-size:13px;font-weight:500;color:var(--text);text-align:left;white-space:nowrap}
+.row-menu-item:hover{background:var(--hover);color:var(--head)}
+.row-menu-item:disabled{opacity:.4;cursor:default}
+.row-menu-item.danger{color:var(--danger)}
+.row-menu-item.danger:hover{background:color-mix(in srgb,var(--danger) 12%,transparent);color:var(--danger)}
+.ctx-sep{height:1px;background:var(--line);margin:5px 6px}
+
+/* ── Drop overlay & toasts ──────────────────────────────────────────────────── */
+#drop-overlay{display:none;position:fixed;inset:12px;z-index:140;border-radius:20px;border:2px dashed var(--accent);background:color-mix(in srgb,var(--accent) 10%,transparent);pointer-events:none;align-items:center;justify-content:center}
+body.dragging-files #drop-overlay{display:flex}
+.drop-card{background:var(--card);border-radius:16px;box-shadow:var(--shadow-lg);padding:18px 22px;display:flex;align-items:center;gap:12px;font-size:15px;font-weight:600;color:var(--head)}
+.drop-card svg{width:22px;height:22px;color:var(--accent)}
+#toast-stack{position:fixed;left:50%;bottom:24px;transform:translateX(-50%);z-index:150;display:flex;flex-direction:column;align-items:center;gap:8px;pointer-events:none;width:min(440px,calc(100vw - 32px))}
+#progress-wrap{display:none;width:100%;background:var(--card);border-radius:14px;box-shadow:var(--shadow-lg);padding:12px 14px;pointer-events:auto}
+.prog-row{display:flex;justify-content:space-between;font-size:13px;font-weight:600;color:var(--head);margin-bottom:8px}
+#pct{color:var(--muted);font-weight:500}
+#bar-track{height:6px;border-radius:3px;background:var(--raised);overflow:hidden}
+#bar{height:100%;width:0;background:var(--accent);border-radius:3px;transition:width .1s linear}
+#msg{max-width:100%;background:var(--card);color:var(--head);border-radius:12px;box-shadow:var(--shadow-lg);padding:10px 14px;font-size:13px;font-weight:500;opacity:0;transform:translateY(8px);transition:opacity .2s,transform .2s;pointer-events:auto;word-break:break-word;text-align:center}
+#msg.show{opacity:1;transform:none}
+#msg.ok{box-shadow:var(--shadow-lg),inset 3px 0 0 var(--ok)}
+#msg.err{box-shadow:var(--shadow-lg),inset 3px 0 0 var(--danger)}
+#msg:empty{display:none}
+
+/* ── Dialogs ────────────────────────────────────────────────────────────────── */
+#confirm-modal,#move-modal,#pw-modal,#prompt-modal,#modal,#settings-modal,#note-modal,#qr-modal{display:none;position:fixed;inset:0;background:var(--scrim);backdrop-filter:blur(4px);align-items:center;justify-content:center;padding:20px}
+#confirm-modal.open,#move-modal.open,#pw-modal.open,#prompt-modal.open,#modal.open,#settings-modal.open,#note-modal.open,#qr-modal.open{display:flex}
+#modal{z-index:100}#settings-modal,#note-modal,#qr-modal{z-index:105}#move-modal,#prompt-modal{z-index:110}#confirm-modal{z-index:130}#pw-modal{z-index:135}
+#confirm-box,#move-box,#pw-box,#prompt-box,#note-box,#qr-box{background:var(--card);border-radius:18px;box-shadow:var(--shadow-lg);padding:22px;width:100%;max-width:380px}
+#note-box{max-width:560px}
+#qr-box{max-width:300px;text-align:center}
+#confirm-title,#move-title,#pw-title,#prompt-title,.dlg-title{font-size:16px;font-weight:700;color:var(--head);margin-bottom:12px}
+#move-title span{color:var(--accent)}
+#confirm-text{font-size:14px;color:var(--text);line-height:1.55;word-break:break-word}
+#confirm-text b{color:var(--head)}
+.confirm-name{font-size:13px;font-weight:600;color:var(--head);background:var(--side);border-radius:10px;padding:9px 12px;margin-top:10px;word-break:break-all}
+#confirm-note{font-size:12.5px;color:var(--muted);margin-top:10px}
+#confirm-actions,#move-actions,#pw-actions,#prompt-actions,.dlg-actions{display:flex;justify-content:flex-end;gap:8px;margin-top:20px;flex-wrap:wrap}
+#pw-sub{font-size:13px;color:var(--muted);margin:-6px 0 12px;word-break:break-all}
+#pw-input,#prompt-input{width:100%;height:42px;padding:0 14px;background:var(--side);border:none;border-radius:11px;font-size:14px;outline:none;box-shadow:inset 0 0 0 1px var(--line)}
+#pw-input:focus,#prompt-input:focus{box-shadow:inset 0 0 0 2px var(--accent)}
+#pw-err,#prompt-err{font-size:12.5px;color:var(--danger);margin-top:8px;display:none}
+#move-crumb{display:flex;align-items:center;flex-wrap:wrap;gap:4px;font-size:13px;color:var(--muted);margin-bottom:10px}
+.mc-item{cursor:pointer;padding:2px 6px;border-radius:6px}
+.mc-item:hover{background:var(--hover);color:var(--accent)}
+.mc-sep{opacity:.5}
+#move-list{border-radius:12px;min-height:8rem;max-height:15rem;overflow-y:auto;background:var(--side);padding:4px}
+.move-row{display:flex;align-items:center;gap:10px;width:100%;text-align:left;background:none;border:none;border-radius:8px;color:var(--text);font-size:13.5px;font-weight:500;padding:9px 10px}
+.move-row::before{content:'';width:16px;height:13px;border-radius:3px;background:var(--c-folder);opacity:.85;flex-shrink:0}
+.move-row:hover:not(.disabled){background:var(--hover);color:var(--head)}
+.move-row.disabled{opacity:.4;cursor:default}
+.move-empty{font-size:13px;color:var(--muted);padding:14px}
+#note-input{width:100%;min-height:9rem;max-height:50vh;resize:vertical;background:var(--side);border:none;border-radius:12px;padding:14px 16px;font-size:14.5px;line-height:1.6;outline:none;box-shadow:inset 0 0 0 1px var(--line)}
+#note-input:focus{box-shadow:inset 0 0 0 2px var(--accent)}
+#note-input::placeholder{color:var(--muted)}
+.dlg-actions .spacer{flex:1}
+.qr-img{width:220px;height:220px;image-rendering:pixelated;background:#fff;padding:10px;border-radius:14px;margin:4px auto 12px;display:block}
+.qr-url{font-size:12.5px;color:var(--muted);word-break:break-all}
+
+/* preview */
+#modal-box{background:var(--card);border-radius:18px;box-shadow:var(--shadow-lg);max-width:92vw;max-height:92vh;overflow:auto;display:flex;flex-direction:column;min-width:320px}
+#modal-header{display:flex;align-items:center;justify-content:space-between;gap:12px;padding:14px 16px 14px 20px;flex-shrink:0}
+#modal-filename{font-size:14px;font-weight:600;color:var(--head);word-break:break-all}
+#modal-close{width:34px;height:34px;border:none;border-radius:10px;background:var(--side);color:var(--text);display:flex;align-items:center;justify-content:center;flex-shrink:0}
+#modal-close:hover{background:var(--raised)}
+#modal-content{padding:0 20px;display:flex;align-items:center;justify-content:center;min-height:120px}
+#modal-content img{max-width:84vw;max-height:72vh;display:block;border-radius:10px}
+#modal-content video{max-width:84vw;max-height:72vh;display:block;border-radius:10px;outline:none;background:#000}
+#modal-content audio{width:440px;max-width:80vw;outline:none}
+#modal-content iframe{width:76vw;height:72vh;border:none;display:block;border-radius:10px;background:#fff}
+#modal-content pre{font-family:ui-monospace,'Cascadia Code',Consolas,monospace;font-size:13px;color:var(--text);white-space:pre-wrap;word-break:break-word;width:min(70vw,680px);max-height:66vh;overflow:auto;line-height:1.7;background:var(--side);border-radius:12px;padding:16px;cursor:text}
+#note-edit{width:min(70vw,680px);max-width:100%;height:min(60vh,440px);background:var(--side);border:none;border-radius:12px;font-family:ui-monospace,'Cascadia Code',Consolas,monospace;font-size:13px;line-height:1.7;padding:16px;outline:none;resize:vertical;box-shadow:inset 0 0 0 2px var(--accent)}
+#modal-footer{padding:16px 20px;display:flex;justify-content:flex-end;gap:8px;flex-shrink:0}
+#modal-copy{display:none}
+.prep{display:flex;flex-direction:column;align-items:center;justify-content:center;gap:12px;padding:44px 24px;min-width:280px}
+.prep-spin{width:28px;height:28px;border:3px solid var(--raised);border-top-color:var(--accent);border-radius:50%;animation:prep-rot .8s linear infinite}
+@keyframes prep-rot{to{transform:rotate(360deg)}}
+.prep-msg{font-size:14px;font-weight:600;color:var(--head);text-align:center}
+.prep-sub{font-size:12.5px;color:var(--muted);text-align:center}
+
+/* settings */
+#settings-box{background:var(--card);border-radius:20px;box-shadow:var(--shadow-lg);width:100%;max-width:600px;max-height:88vh;display:flex;flex-direction:column;overflow:hidden}
+.set-head{display:flex;align-items:center;justify-content:space-between;padding:18px 18px 10px 24px}
+.set-head .dlg-title{margin:0;font-size:18px}
+.set-body{overflow-y:auto;padding:0 24px 24px}
+.set-group{padding-top:16px}
+.set-group-title{font-size:12px;font-weight:700;color:var(--muted);letter-spacing:.04em;text-transform:uppercase;margin-bottom:6px}
+.set-row{display:flex;align-items:center;justify-content:space-between;gap:16px;padding:12px 0;border-bottom:1px solid var(--line)}
+.set-row:last-child{border-bottom:none}
+.set-label{font-size:14px;font-weight:600;color:var(--head)}
+.set-desc{font-size:12.5px;color:var(--muted);margin-top:2px}
+.set-row .seg{flex-shrink:0}
+.swatches{display:flex;gap:8px}
+.swatch{width:28px;height:28px;border-radius:14px;border:none;box-shadow:inset 0 0 0 1px rgba(0,0,0,.1);position:relative}
+.swatch.on{box-shadow:0 0 0 2px var(--card),0 0 0 4px var(--sw)}
+.switch{width:42px;height:24px;border-radius:12px;border:none;background:var(--raised);position:relative;flex-shrink:0;transition:background .2s}
+.switch::after{content:'';position:absolute;top:3px;left:3px;width:18px;height:18px;border-radius:9px;background:#fff;box-shadow:0 1px 2px rgba(0,0,0,.3);transition:transform .2s}
+.switch[aria-checked=true]{background:var(--accent-fill)}
+.switch[aria-checked=true]::after{transform:translateX(18px)}
+.set-select{height:34px;border:none;border-radius:9px;background:var(--side);padding:0 10px;font-size:13px;font-weight:600;color:var(--head)}
+.set-list{display:flex;flex-direction:column;gap:6px;margin-top:8px;width:100%}
+.set-item{display:flex;align-items:center;gap:10px;background:var(--side);border-radius:10px;padding:8px 8px 8px 12px;font-size:13px;min-width:0}
+.set-item .nm{flex:1;min-width:0;white-space:nowrap;overflow:hidden;text-overflow:ellipsis;font-weight:600;color:var(--head)}
+.set-item .folder-btn{height:30px;padding:0 10px;font-size:12px;background:var(--card)}
+.set-col{flex-direction:column;align-items:stretch}
+.set-path{font-size:12px;color:var(--muted);word-break:break-all}
+
+/* ── Phone ──────────────────────────────────────────────────────────────────── */
+.bottombar{display:none}
+@media (max-width:760px){
+  .sidebar{position:fixed;left:0;top:0;bottom:0;width:min(300px,86vw);transform:translateX(-102%);transition:transform .25s cubic-bezier(.2,.8,.2,1);box-shadow:var(--shadow-lg);padding-top:max(18px,env(safe-area-inset-top))}
+  body.drawer-open .sidebar{transform:none}
+  body.drawer-open #scrim{display:block}
+  .topbar{height:58px;padding:0 10px 0 8px;gap:6px;padding-top:env(safe-area-inset-top);height:calc(58px + env(safe-area-inset-top))}
+  #menu-toggle{display:inline-flex}
+  .breadcrumb{visibility:hidden}
+  .cmd{display:none}
+  body.search-open .cmd{display:flex;position:fixed;top:calc(8px + env(safe-area-inset-top));left:8px;right:8px;width:auto;max-width:none;height:46px;z-index:70;background:var(--card);box-shadow:var(--shadow-lg)}
+  body.search-open #search-close{display:flex}
+  body.search-open .kbd{display:none}
+  .kbd{display:none}
+  #qr-btn{display:none}
+  .content{padding:4px 16px calc(110px + env(safe-area-inset-bottom))}
+  #folder-title{font-size:24px}
+  .folder-head{padding-bottom:14px;align-items:center}
+  .folder-actions .lbl{display:none}
+  .folder-actions .btn:not(.icon){padding:0 10px}
+  .pin-strip{display:flex}
+  .list-head,.col-size,.col-date{display:none}
+  .file-list{margin:0 -8px}
+  .file-item,.note-item{padding:8px}
+  .file-actions{opacity:1;width:auto}
+  .file-actions .view-btn,.file-actions .dl-btn,.file-actions .copy-btn{display:none}
+  .note-item.editing-row .file-actions .copy-btn,.note-item.editing-row .file-actions .view-btn{display:inline-flex}
+  .act{background:transparent;box-shadow:none;color:var(--muted)}
+  .file-list.grid{grid-template-columns:repeat(2,minmax(0,1fr));gap:12px;margin:0}
+  .file-list.grid .ft-tile{height:118px}
+  .file-list.grid .file-actions{top:12px;right:12px}
+  .file-list.grid .act{background:var(--card);box-shadow:var(--btn-shadow);color:var(--text)}
+  .drop-hint{display:none}
+  #share-banner{flex-direction:column;align-items:flex-start}
+  #select-bar{top:66px}
+  .bottombar{display:flex;position:fixed;left:50%;transform:translateX(-50%);bottom:calc(14px + env(safe-area-inset-bottom));z-index:30;align-items:center;gap:6px;padding:6px;border-radius:22px;background:color-mix(in srgb,var(--card) 92%,transparent);backdrop-filter:blur(14px);box-shadow:var(--shadow-lg)}
+  .bb-btn{height:48px;min-width:64px;border:none;border-radius:16px;background:transparent;color:var(--text);display:flex;flex-direction:column;align-items:center;justify-content:center;gap:2px;font-size:11px;font-weight:600}
+  .bb-btn svg{width:20px;height:20px}
+  .bb-main{width:60px;min-width:60px;height:52px;border-radius:18px;background:var(--accent-fill);color:#fff;box-shadow:0 4px 14px color-mix(in srgb,var(--accent-fill) 45%,transparent)}
+  .bb-main svg{width:24px;height:24px}
+  #toast-stack{bottom:calc(92px + env(safe-area-inset-bottom))}
+  #modal{padding:10px}
+  #modal-content{padding:0 10px}
+  #modal-content img,#modal-content video{max-width:94vw}
+  #modal-content iframe{width:94vw}
+  #settings-modal{align-items:flex-end;padding:0}
+  #settings-box{max-width:none;border-radius:20px 20px 0 0;max-height:92vh;padding-bottom:env(safe-area-inset-bottom)}
+  .set-row{flex-wrap:wrap}
 }
-
-/* mobile: ⋮ only */
-@media (max-width:640px){
-  .file-item,.dir-item{grid-template-columns:52px 1fr auto!important}
-  .note-item{grid-template-columns:1fr auto!important}
-  .view-btn,.dl-btn,.note-actions,.action-sep{display:none!important}
-  .menu-btn{display:flex!important;align-items:center}
-  #hdr-desktop{display:none!important}
-  .hdr-mobile-meta{display:flex!important}
-  #select-trigger{display:none!important}
-  .drop-card{display:none}
-  .upload-compact{display:flex;border-radius:12px}
-  .uc-icon{border-radius:8px}
-  .upload-section{padding:1.25rem 0 1rem}
-  .note-field{flex-direction:column;align-items:stretch;gap:0;padding:0;border-radius:12px}
-  #note-input{padding:14px 16px 10px;min-height:4.5rem;max-height:8rem}
-  .note-divider{display:block}
-  .note-btns{align-self:stretch;padding:10px 12px;gap:8px}
-  #paste-btn{flex:1;text-align:center;padding:.6rem 0;border-radius:8px}
-  #note-submit{flex:1;text-align:center;padding:.6rem 0;border-radius:8px;background:#9a7d4a;color:#100e0b;border:none;font-weight:500}
-  #note-submit:hover{color:var(--bg);border-color:transparent}
-}
-
-/* modal */
-#modal{display:none;position:fixed;inset:0;background:rgba(0,0,0,.75);z-index:100;align-items:center;justify-content:center;padding:1.5rem}
-#modal.open{display:flex}
-#modal-box{background:var(--card);border:1px solid var(--faint);border-radius:8px;max-width:90vw;max-height:90vh;overflow:auto;display:flex;flex-direction:column;min-width:320px}
-#modal-header{display:flex;align-items:center;justify-content:space-between;padding:.875rem 1.25rem;border-bottom:1px solid var(--rule);flex-shrink:0}
-#modal-filename{font-family:'IBM Plex Mono',monospace;font-size:.8rem;font-weight:500;color:var(--text);word-break:break-all;padding-right:1rem}
-#modal-close{background:none;border:none;color:var(--muted);font-size:1.4rem;cursor:pointer;line-height:1;padding:.1rem .3rem;transition:color .15s;flex-shrink:0}
-#modal-close:hover{color:var(--text)}
-#modal-content{padding:1.25rem;display:flex;align-items:center;justify-content:center;min-height:120px}
-#modal-content img{max-width:80vw;max-height:70vh;display:block;border-radius:4px}
-#modal-content video{max-width:80vw;max-height:70vh;display:block;border-radius:4px;outline:none}
-#modal-content audio{width:420px;max-width:80vw;outline:none}
-#modal-content iframe{width:75vw;height:70vh;border:none;display:block}
-#modal-content pre{font-family:'IBM Plex Mono',monospace;font-size:.85rem;color:var(--text);white-space:pre-wrap;word-break:break-word;max-width:70vw;max-height:65vh;overflow:auto;line-height:1.7}
-#modal-content pre{cursor:text}
-#note-edit{width:min(70vw,640px);max-width:100%;height:min(60vh,420px);background:var(--bg);border:1px solid var(--faint);border-radius:4px;color:var(--text);font-family:'IBM Plex Mono',monospace;font-size:.85rem;line-height:1.7;padding:.9rem 1rem;outline:none;resize:vertical}
-#note-edit:focus{border-color:var(--gold-dim)}
-#modal-save{font-family:'IBM Plex Mono',monospace;font-size:.75rem;font-weight:500;letter-spacing:.06em;color:var(--gold);background:none;border:1px solid var(--gold-dim);padding:.45rem 1rem;border-radius:4px;cursor:pointer;transition:color .15s,border-color .15s}
-#modal-save:hover:not(:disabled){border-color:var(--gold)}
-#modal-save:disabled{opacity:.5;cursor:default}
-#modal-cancel{font-family:'IBM Plex Mono',monospace;font-size:.75rem;font-weight:500;letter-spacing:.06em;color:var(--muted);background:none;border:1px solid var(--faint);padding:.45rem 1rem;border-radius:4px;cursor:pointer;transition:color .15s,border-color .15s}
-#modal-cancel:hover{color:var(--text);border-color:var(--rule)}
-#modal-footer{padding:.875rem 1.25rem;border-top:1px solid var(--rule);display:flex;justify-content:flex-end;gap:.75rem;flex-shrink:0}
-#modal-dl{font-family:'IBM Plex Mono',monospace;font-size:.75rem;font-weight:500;letter-spacing:.06em;color:var(--muted);background:none;border:1px solid var(--faint);padding:.45rem 1rem;border-radius:4px;cursor:pointer;transition:color .15s,border-color .15s}
-#modal-dl:hover{color:var(--gold);border-color:var(--gold-dim)}
-#modal-copy{font-family:'IBM Plex Mono',monospace;font-size:.75rem;font-weight:500;letter-spacing:.06em;color:var(--muted);background:none;border:1px solid var(--faint);padding:.45rem 1rem;border-radius:4px;cursor:pointer;transition:color .15s,border-color .15s;display:none}
-#modal-copy:hover{color:var(--text);border-color:var(--rule)}
+body.share-view .owner-only{display:none!important}
 </style>
 </head>
 <body>
-<div class="shell">
-  <header>
-    <div class="wordmark">File<span>Drop</span></div>
-    <div class="header-meta" id="hdr-desktop">
-      <span class="pill active">:{{.Port}}</span>
-      <button class="theme-btn" id="theme-btn" onclick="toggleTheme()">&#9728; Light</button>
+<div class="app">
+  <aside class="sidebar" id="sidebar" aria-label="Folders">
+    <div class="brand">
+      <div class="brand-mark"><svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.4" stroke-linecap="round" stroke-linejoin="round"><path d="M12 4v12"/><path d="M6.5 11l5.5 5.5 5.5-5.5"/><path d="M5 20h14"/></svg></div>
+      <div class="brand-name">FileDrop</div>
     </div>
-    <div class="hdr-mobile-meta" id="hdr-mobile">
-      <div class="hdr-icons">
-        <button class="hdr-icon-btn" id="theme-btn-m" onclick="toggleTheme()">&#9728;&#xFE0E;</button>
+    <div class="side-actions owner-only">
+      <div class="upload-split">
+        <button class="btn primary" id="upload-btn"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.2" stroke-linecap="round" stroke-linejoin="round"><path d="M12 19V7"/><path d="M6.5 12.5L12 7l5.5 5.5"/><path d="M5 4h14"/></svg>Upload</button>
+        <button class="btn icon" id="folder-upload-btn" title="Upload a folder" aria-label="Upload a folder"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M3 7.5A2.5 2.5 0 0 1 5.5 5h3.6l2 2.2h7.4A2.5 2.5 0 0 1 21 9.7v7.8a2.5 2.5 0 0 1-2.5 2.5h-13A2.5 2.5 0 0 1 3 17.5z"/><path d="M12 16.5v-6"/><path d="M9.5 13l2.5-2.5 2.5 2.5"/></svg></button>
       </div>
+      <button class="btn" id="new-note-btn"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M12 5v14"/><path d="M5 12h14"/></svg>New note</button>
+      <input type="file" id="file-input" multiple hidden>
+      <input type="file" id="folder-input" webkitdirectory directory multiple hidden>
     </div>
-  </header>
-
-  <div class="upload-section">
-    <div class="drop-card" id="drop">
-      <div class="drop-icon">&#x2193;</div>
-      <p class="drop-label">Drop files or folders to upload</p>
-      <p class="drop-sub">any format &nbsp;&#xB7;&nbsp; up to 10 GB &nbsp;&#xB7;&nbsp; click to browse &nbsp;&#xB7;&nbsp; <span id="folder-pick-link" style="text-decoration:underline;cursor:pointer">upload a folder</span></p>
-      <input type="file" id="file-input" multiple>
-      <input type="file" id="folder-input" webkitdirectory directory multiple style="display:none">
+    <div class="side-section owner-only" id="pin-section">
+      <div class="side-title">Pinned</div>
+      <div id="pin-list"><div class="side-empty">Pin files or folders from their menu</div></div>
     </div>
-    <div class="upload-compact" onclick="document.getElementById('file-input').click()">
-      <div class="uc-icon">&#x2191;</div>
-      <div class="uc-text">
-        <div class="uc-title">Upload files</div>
-        <div class="uc-sub">any format · up to 10 GB</div>
+    <div class="side-section" style="flex:1;min-height:0">
+      <div class="side-title">Folders</div>
+      <div class="tree-wrap" id="tree"></div>
+    </div>
+    <div class="side-foot">
+      <div id="disk-bar-wrap" style="display:none;flex-direction:column;gap:8px">
+        <div id="disk-bar-track"><div id="disk-bar-fill" style="width:0%"></div></div>
       </div>
-      <span class="uc-chevron">&#x203A;</span>
+      <div class="disk-meta"><span id="disk-label"></span><span title="{{.UploadDir}}">{{.FooterLabel}} · :{{.Port}}</span></div>
     </div>
-    <div class="upload-compact" id="folder-upload-compact" style="margin-top:.6rem" onclick="document.getElementById('folder-input').click()">
-      <div class="uc-icon">&#x1F4C1;</div>
-      <div class="uc-text">
-        <div class="uc-title">Upload folder</div>
-        <div class="uc-sub">preserves subfolder structure</div>
+  </aside>
+  <div id="scrim"></div>
+
+  <div class="main" id="main">
+    <header class="topbar">
+      <button class="btn icon ghost" id="menu-toggle" aria-label="Open folders"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round"><path d="M4 7h16"/><path d="M4 12h16"/><path d="M4 17h10"/></svg></button>
+      <nav class="breadcrumb" id="breadcrumb" aria-label="Location"></nav>
+      <div class="cmd" id="cmd">
+        <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><circle cx="11" cy="11" r="7"/><path d="M20 20l-3.5-3.5"/></svg>
+        <input id="search-input" type="search" placeholder="Search files or run a command" autocomplete="off" spellcheck="false" aria-label="Search files or run a command">
+        <button id="search-clear" style="display:none" aria-label="Clear search"><svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.2" stroke-linecap="round"><path d="M6 6l12 12"/><path d="M18 6L6 18"/></svg></button>
+        <span class="kbd">Ctrl K</span>
+        <button class="btn icon ghost" id="search-close" aria-label="Close search"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.2" stroke-linecap="round"><path d="M6 6l12 12"/><path d="M18 6L6 18"/></svg></button>
+        <div id="cmd-menu" role="listbox"></div>
       </div>
-      <span class="uc-chevron">&#x203A;</span>
-    </div>
-    <div id="progress-wrap">
-      <div id="bar-track"><div id="bar"></div></div>
-      <div id="pct">0%</div>
-    </div>
-    <div id="msg"></div>
-
-    <div class="note-wrap">
-      <div class="note-field">
-        <textarea id="note-input" rows="3" placeholder="Add a note or paste text..."></textarea>
-        <div class="note-divider"></div>
-        <div class="note-btns"><button id="paste-btn">⇳ Paste</button><button id="note-submit">&#x23CE; Save note</button></div>
+      <div class="top-actions">
+        <button class="btn icon ghost owner-only" id="qr-btn" title="Open on your phone" aria-label="Open on your phone"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"><rect x="4" y="4" width="6" height="6" rx="1.2"/><rect x="14" y="4" width="6" height="6" rx="1.2"/><rect x="4" y="14" width="6" height="6" rx="1.2"/><path d="M14 14h2v2h-2z"/><path d="M18 18h2v2h-2z"/><path d="M18 14h2"/><path d="M14 18v2"/></svg></button>
+        <button class="btn icon ghost" id="theme-btn" aria-label="Switch theme"></button>
+        <button class="btn icon ghost" id="settings-btn" title="Settings" aria-label="Settings"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"><circle cx="12" cy="12" r="3"/><path d="M19.4 15a1.7 1.7 0 0 0 .3 1.8l.1.1a2 2 0 1 1-2.8 2.8l-.1-.1a1.7 1.7 0 0 0-1.8-.3 1.7 1.7 0 0 0-1 1.5V21a2 2 0 1 1-4 0v-.1a1.7 1.7 0 0 0-1.1-1.5 1.7 1.7 0 0 0-1.8.3l-.1.1a2 2 0 1 1-2.8-2.8l.1-.1a1.7 1.7 0 0 0 .3-1.8 1.7 1.7 0 0 0-1.5-1H3a2 2 0 1 1 0-4h.1a1.7 1.7 0 0 0 1.5-1.1 1.7 1.7 0 0 0-.3-1.8l-.1-.1a2 2 0 1 1 2.8-2.8l.1.1a1.7 1.7 0 0 0 1.8.3H9a1.7 1.7 0 0 0 1-1.5V3a2 2 0 1 1 4 0v.1a1.7 1.7 0 0 0 1 1.5 1.7 1.7 0 0 0 1.8-.3l.1-.1a2 2 0 1 1 2.8 2.8l-.1.1a1.7 1.7 0 0 0-.3 1.8V9a1.7 1.7 0 0 0 1.5 1H21a2 2 0 1 1 0 4h-.1a1.7 1.7 0 0 0-1.5 1z"/></svg></button>
       </div>
-    </div>
-  </div>
+    </header>
 
-  <div class="search-wrap">
-    <div class="search-field">
-      <span class="search-icon">&#x2315;</span>
-      <input id="search-input" type="search" placeholder="Search names and file contents...">
-      <button id="search-clear" style="display:none">&#xD7;</button>
-    </div>
-  </div>
+    <div class="content">
+      <div class="folder-head">
+        <div>
+          <h1 id="folder-title">All files</h1>
+          <div class="folder-meta" id="divider-text">Loading…</div>
+        </div>
+        <div class="folder-actions">
+          <div class="ext-filter">
+            <button class="btn" id="ext-btn" onclick="toggleExtMenu(event)" title="Filter by file type" disabled><span id="ext-btn-label">All</span><svg class="ext-caret" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.4" stroke-linecap="round" stroke-linejoin="round"><path d="M6 9l6 6 6-6"/></svg></button>
+            <div class="ext-menu" id="ext-menu"></div>
+          </div>
+          <button class="btn owner-only" id="share-btn" onclick="startShare()" title="Create a shared folder"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><circle cx="18" cy="5.5" r="2.5"/><circle cx="6" cy="12" r="2.5"/><circle cx="18" cy="18.5" r="2.5"/><path d="M8.2 10.8l7.6-4"/><path d="M8.2 13.2l7.6 4"/></svg><span class="lbl">Share</span></button>
+          <button class="btn owner-only" id="newfolder-btn" onclick="openNewFolder()" title="Create a folder"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M3 7.5A2.5 2.5 0 0 1 5.5 5h3.6l2 2.2h7.4A2.5 2.5 0 0 1 21 9.7v7.8a2.5 2.5 0 0 1-2.5 2.5h-13A2.5 2.5 0 0 1 3 17.5z"/><path d="M12 11v5"/><path d="M9.5 13.5h5"/></svg><span class="lbl">New folder</span></button>
+          <button class="btn icon owner-only" id="select-trigger" onclick="enterSelectMode()" title="Select items" aria-label="Select items"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><rect x="4" y="4" width="16" height="16" rx="4"/><path d="M8.5 12l2.5 2.5 4.5-5"/></svg></button>
+          <div class="seg" role="group" aria-label="View">
+            <button id="view-list" aria-label="List view" title="List view"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M9 6h11"/><path d="M9 12h11"/><path d="M9 18h11"/><path d="M4.5 6h.01"/><path d="M4.5 12h.01"/><path d="M4.5 18h.01"/></svg></button>
+            <button id="view-grid" aria-label="Grid view" title="Grid view"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><rect x="4" y="4" width="6.5" height="6.5" rx="1.6"/><rect x="13.5" y="4" width="6.5" height="6.5" rx="1.6"/><rect x="4" y="13.5" width="6.5" height="6.5" rx="1.6"/><rect x="13.5" y="13.5" width="6.5" height="6.5" rx="1.6"/></svg></button>
+          </div>
+        </div>
+      </div>
 
-  <div class="divider">
-    <div class="divider-line"></div>
-    <span class="divider-text" id="divider-text">Loading...</span>
-    <div class="divider-line"></div>
-  </div>
-
-  <div class="breadcrumb" id="breadcrumb"></div>
-  <div class="folder-row">
-    <div class="ext-filter">
-      <button id="ext-btn" onclick="toggleExtMenu(event)" title="Filter by file type" disabled><span id="ext-btn-label">All</span><span class="ext-caret">&#x25BC;</span></button>
-      <div class="ext-menu" id="ext-menu"></div>
-    </div>
-    <button id="newfolder-btn" onclick="openNewFolder()" title="Create a folder"><span class="nf-plus">+</span>New</button>
-    <button id="share-btn" onclick="startShare()" title="Create a shared folder"><span class="nf-plus">&#x21AA;</span>Share</button>
-    <button id="select-trigger" onclick="enterSelectMode()" title="Select to delete"><svg width="15" height="15" viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round"><polyline points="2,4 14,4"/><path d="M5 4V3a1 1 0 0 1 1-1h4a1 1 0 0 1 1 1v1"/><path d="M13 4l-.8 10H3.8L3 4"/><line x1="6.5" y1="7" x2="6.5" y2="11"/><line x1="9.5" y1="7" x2="9.5" y2="11"/></svg></button>
-  </div>
-  <div id="share-banner" style="display:none"></div>
-  <div id="select-bar">
-    <span id="select-bar-count">0 selected</span>
-    <div id="select-bar-actions">
-      <button class="folder-btn" id="sb-copy" onclick="bulkCopy()">Copy</button>
-      <button class="folder-btn" id="sb-cut" onclick="bulkCut()">Cut</button>
-      <button class="folder-btn" id="sb-download" onclick="bulkDownload()">Download</button>
-      {{if .CanPublish}}<button class="folder-btn" id="sb-upload" onclick="bulkUpload()">Upload</button>{{end}}
-      <button class="folder-btn primary" id="sb-add" style="display:none" onclick="finishShare()">Add to shared folder</button>
-      <button class="folder-btn danger" id="select-bar-delete" onclick="confirmBulkDelete()">Delete</button>
-      <span class="sb-div"></span>
-      <button class="folder-btn" id="sb-cancel" onclick="exitSelectMode()">Done</button>
+      <div class="pin-strip owner-only" id="pin-strip"></div>
+      <div id="share-banner"></div>
+      <div id="select-bar">
+        <span id="select-bar-count">0 selected</span>
+        <div id="select-bar-actions">
+          <button class="folder-btn" id="sb-copy" onclick="bulkCopy()">Copy</button>
+          <button class="folder-btn" id="sb-cut" onclick="bulkCut()">Cut</button>
+          <button class="folder-btn" id="sb-download" onclick="bulkDownload()">Download</button>
+          {{if .CanPublish}}<button class="folder-btn" id="sb-upload" onclick="bulkUpload()">Upload</button>{{end}}
+          <button class="folder-btn primary" id="sb-add" style="display:none" onclick="finishShare()">Add to shared folder</button>
+          <button class="folder-btn danger" id="select-bar-delete" onclick="confirmBulkDelete()">Delete</button>
+          <span class="sb-div"></span>
+          <button class="folder-btn" id="sb-cancel" onclick="exitSelectMode()">Done</button>
+        </div>
+      </div>
+      <div id="list-head-slot"></div>
+      <div class="file-list" id="file-list"></div>
+      <div class="drop-hint owner-only"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.9" stroke-linecap="round" stroke-linejoin="round"><path d="M12 19V7"/><path d="M6.5 12.5L12 7l5.5 5.5"/><path d="M5 4h14"/></svg>Drop files anywhere to upload</div>
     </div>
   </div>
-  <div class="file-list" id="file-list"></div>
-
-  <footer>
-    <span class="ft-l">FileDrop &nbsp;&#xB7;&nbsp; {{.FooterLabel}}</span>
-    <div id="disk-bar-wrap" style="display:none">
-      <div id="disk-bar-track"><div id="disk-bar-fill" style="width:0%"></div></div>
-      <span id="disk-label"></span>
-    </div>
-    <span class="ft-r">{{.UploadDir}}</span>
-  </footer>
 </div>
 
+<nav class="bottombar" aria-label="Quick actions">
+  <button class="bb-btn" id="bb-search"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><circle cx="11" cy="11" r="7"/><path d="M20 20l-3.5-3.5"/></svg>Search</button>
+  <button class="bb-btn bb-main owner-only" id="bb-upload" aria-label="Upload"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.4" stroke-linecap="round" stroke-linejoin="round"><path d="M12 19V7"/><path d="M6.5 12.5L12 7l5.5 5.5"/><path d="M5 4h14"/></svg></button>
+  <button class="bb-btn owner-only" id="bb-note"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M4 6.5A2.5 2.5 0 0 1 6.5 4h11A2.5 2.5 0 0 1 20 6.5V15l-5 5H6.5A2.5 2.5 0 0 1 4 17.5z"/><path d="M8 9h8"/><path d="M8 12.5h5"/></svg>Note</button>
+</nav>
 
+<div id="drop-overlay"><div class="drop-card"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.2" stroke-linecap="round" stroke-linejoin="round"><path d="M12 19V7"/><path d="M6.5 12.5L12 7l5.5 5.5"/><path d="M5 4h14"/></svg><span id="drop-label">Drop to upload</span></div></div>
+<div id="toast-stack">
+  <div id="progress-wrap">
+    <div class="prog-row"><span>Uploading…</span><span id="pct">0%</span></div>
+    <div id="bar-track"><div id="bar"></div></div>
+  </div>
+  <div id="msg" role="status" aria-live="polite"></div>
+</div>
 
+<div id="note-modal">
+  <div id="note-box">
+    <div class="dlg-title">New note</div>
+    <textarea id="note-input" placeholder="Write a note, or paste text or an image…"></textarea>
+    <div class="dlg-actions">
+      <button class="folder-btn" id="paste-btn">Paste</button>
+      <span class="spacer"></span>
+      <button class="folder-btn" onclick="closeNote()">Cancel</button>
+      <button class="folder-btn primary" id="note-submit">Save note</button>
+    </div>
+  </div>
+</div>
+<div id="qr-modal">
+  <div id="qr-box">
+    <div class="dlg-title">Open on your phone</div>
+    <img class="qr-img" id="qr-img" alt="QR code for this page">
+    <div class="qr-url" id="qr-url"></div>
+    <div class="dlg-actions" style="justify-content:center"><button class="folder-btn" onclick="closeQr()">Close</button></div>
+  </div>
+</div>
+<div id="settings-modal">
+  <div id="settings-box" role="dialog" aria-label="Settings">
+    <div class="set-head"><div class="dlg-title">Settings</div><button class="btn icon ghost" onclick="closeSettings()" aria-label="Close settings"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.2" stroke-linecap="round"><path d="M6 6l12 12"/><path d="M18 6L6 18"/></svg></button></div>
+    <div class="set-body" id="settings-body"></div>
+  </div>
+</div>
 
 <div id="confirm-modal">
   <div id="confirm-box">
@@ -987,12 +1086,11 @@ body.selecting .file-list,body.selecting #select-bar{opacity:1}
     </div>
   </div>
 </div>
-
 <div id="pw-modal">
   <div id="pw-box">
     <div id="pw-title">Unlock</div>
     <div id="pw-sub"></div>
-    <input id="pw-input" type="password" placeholder="password" autocomplete="off">
+    <input id="pw-input" type="password" placeholder="Password" autocomplete="off">
     <div id="pw-err"></div>
     <div id="pw-actions">
       <button class="folder-btn" onclick="closePw()">Cancel</button>
@@ -1003,7 +1101,7 @@ body.selecting .file-list,body.selecting #select-bar{opacity:1}
 <div id="prompt-modal">
   <div id="prompt-box">
     <div id="prompt-title">New folder</div>
-    <input id="prompt-input" type="text" placeholder="folder name" autocomplete="off" spellcheck="false">
+    <input id="prompt-input" type="text" placeholder="Folder name" autocomplete="off" spellcheck="false">
     <div id="prompt-err"></div>
     <div id="prompt-actions">
       <button class="folder-btn" onclick="closePrompt()">Cancel</button>
@@ -1015,14 +1113,14 @@ body.selecting .file-list,body.selecting #select-bar{opacity:1}
   <div id="modal-box">
     <div id="modal-header">
       <span id="modal-filename"></span>
-      <button id="modal-close" onclick="closeModal()">&#xD7;</button>
+      <button id="modal-close" onclick="closeModal()" aria-label="Close preview"><svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.2" stroke-linecap="round"><path d="M6 6l12 12"/><path d="M18 6L6 18"/></svg></button>
     </div>
     <div id="modal-content"></div>
     <div id="modal-footer">
-      <button id="modal-copy">&#x2398; Copy text</button>
-      <button id="modal-dl">&#x2193; Download</button>
-      <button id="modal-cancel" style="display:none">Cancel</button>
-      <button id="modal-save" style="display:none">&#x2713; Save</button>
+      <button class="folder-btn" id="modal-copy">Copy text</button>
+      <button class="folder-btn" id="modal-dl">Download</button>
+      <button class="folder-btn" id="modal-cancel" style="display:none">Cancel</button>
+      <button class="folder-btn primary" id="modal-save" style="display:none">Save</button>
     </div>
   </div>
 </div>
@@ -1033,8 +1131,9 @@ var CAN_PUBLISH = {{if .CanPublish}}true{{else}}false{{end}};
 var SHARE_MODE = {{if .ShareMode}}true{{else}}false{{end}};
 var SHARE_NAME = "{{.ShareName}}";
 var VIDEO_TOOLS = {{if .VideoTools}}true{{else}}false{{end}};
+var PRIVATE_SERVER = {{if .Private}}true{{else}}false{{end}};
+var LAN_URL = "{{.LanURL}}";
 
-var drop = document.getElementById('drop');
 var fi   = document.getElementById('file-input');
 var bar  = document.getElementById('bar');
 var pct  = document.getElementById('pct');
@@ -1082,10 +1181,15 @@ function openMenu(btn, actions) {
   closeMenu();
   var menu = buildMenuEl(actions);
   btn.parentElement.appendChild(menu);
+  btn.parentElement.classList.add('menu-open');
   activeMenu = menu;
 }
 function closeMenu() {
-  if (activeMenu) { activeMenu.remove(); activeMenu = null; }
+  if (activeMenu) {
+    if (activeMenu.parentElement) activeMenu.parentElement.classList.remove('menu-open');
+    activeMenu.remove();
+    activeMenu = null;
+  }
 }
 
 // Right-click anywhere that is not a row, a form field or a dialog acts on the
@@ -1097,7 +1201,7 @@ document.addEventListener('contextmenu', function(e){
   if (e.target.closest('.file-item,.note-item')) return;    // rows handle their own
   // leave the browser's own menu alone where it is genuinely useful; dismiss
   // ours first so the two menus never overlap
-  if (e.target.closest('input,textarea,select,a,.row-menu,#modal,#prompt-modal,#confirm-modal')) { closeMenu(); return; }
+  if (e.target.closest('input,textarea,select,a,.row-menu,#modal,#prompt-modal,#confirm-modal,#move-modal,#pw-modal,#settings-modal,#note-modal,#qr-modal')) { closeMenu(); return; }
   e.preventDefault();
   var acts = [
     {label:'New folder', fn:function(){ openNewFolder(); }},
@@ -1264,11 +1368,12 @@ document.addEventListener('keydown', function(e){
 
 function confirmBulkDelete() {
   if (!selectedPaths.size) return;
+  if (!settings.confirmDelete) { bulkDeleteNow(); return; }
   var n = selectedPaths.size;
-  showConfirm('Delete ' + n + ' item' + (n !== 1 ? 's' : ''),
+  showConfirm('Delete ' + n + ' item' + (n !== 1 ? 's' : '') + '?',
     'Are you sure you want to delete ' + (n === 1 ? 'this item' : 'these <b>' + n + '</b> items') + '?' +
-    '<div id="confirm-note">// this cannot be undone</div>',
-    'OK', bulkDeleteNow);
+    '<div id="confirm-note">This cannot be undone.</div>',
+    'Delete', bulkDeleteNow);
 }
 
 function bulkDeleteNow() {
@@ -1312,13 +1417,14 @@ function deleteItem(path) {
     var full = currentPath ? currentPath + '/' + currentFiles[i].name : currentFiles[i].name;
     if (full === path) { isDir = currentFiles[i].is_dir; break; }
   }
+  if (!settings.confirmDelete) { deleteItemNow(path); return; }
   var what = isDir ? 'folder' : 'file';
-  showConfirm(isDir ? 'Delete folder' : 'Delete file',
+  showConfirm(isDir ? 'Delete folder?' : 'Delete file?',
     'Are you sure you want to delete this ' + what + '?' +
     '<div class="confirm-name">' + esc(path.split('/').pop()) + '</div>' +
-    '<div id="confirm-note">// this cannot be undone' +
-    (isDir ? ' — everything inside it goes too' : '') + '</div>',
-    'OK', function(){ deleteItemNow(path); });
+    '<div id="confirm-note">This cannot be undone' +
+    (isDir ? ', and everything inside it goes too.' : '.') + '</div>',
+    'Delete', function(){ deleteItemNow(path); });
 }
 function deleteItemNow(path) {
   var name = path.split('/').pop();
@@ -1348,38 +1454,136 @@ function loadDisk() {
     var pct = Math.round(used / d.total * 100);
     var wrap = document.getElementById('disk-bar-wrap');
     document.getElementById('disk-bar-fill').style.width = pct + '%';
-    document.getElementById('disk-label').textContent = fmtSize(d.free) + ' free';
+    document.getElementById('disk-label').textContent = fmtSize(d.free) + ' free of ' + fmtSize(d.total);
     wrap.style.display = 'flex';
   }).catch(function(){});
 }
 
-// ── Theme ──────────────────────────────────────────────────────────────────────
-function toggleTheme() {
-  var light = document.body.classList.toggle('light');
-  document.getElementById('theme-btn').textContent = light ? '\u263e Dark' : '\u2600 Light';
-  var m = document.getElementById('theme-btn-m');
-  if (m) m.textContent = light ? '\u263e\ufe0e' : '\u2600\ufe0e';
-  try { localStorage.setItem('fd_theme', light ? 'light' : 'dark'); } catch(e){}
-}
-(function(){
-  try {
-    if (localStorage.getItem('fd_theme') === 'light') {
-      document.body.classList.add('light');
-      document.getElementById('theme-btn').textContent = '\u263e Dark';
-      var m = document.getElementById('theme-btn-m');
-      if (m) m.textContent = '\u263e\ufe0e';
-    }
-  } catch(e){}
+// ── Settings (per browser) ────────────────────────────────────────────────────
+var SETTINGS_DEFAULTS = {
+  theme: 'dark', accent: 'ultramarine', tint: true, density: 'comfortable',
+  view: 'list', viewPerFolder: true, sort: 'recent', showExt: true, confirmDelete: true
+};
+var settings = (function(){
+  var s = {};
+  try { s = JSON.parse(localStorage.getItem('fd_settings') || '{}') || {}; } catch(e){}
+  // carry over the theme chosen before settings existed
+  if (!s.theme) { try { if (localStorage.getItem('fd_theme') === 'light') s.theme = 'light'; } catch(e){} }
+  var out = {};
+  for (var k in SETTINGS_DEFAULTS) out[k] = (s[k] === undefined) ? SETTINGS_DEFAULTS[k] : s[k];
+  return out;
 })();
+
+function saveSettings() {
+  try { localStorage.setItem('fd_settings', JSON.stringify(settings)); } catch(e){}
+}
+
+function resolvedTheme() {
+  if (settings.theme === 'system') return matchMedia('(prefers-color-scheme: light)').matches ? 'light' : 'dark';
+  return settings.theme;
+}
+
+var SUN_SVG  = '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"><circle cx="12" cy="12" r="4"/><path d="M12 2.5v2"/><path d="M12 19.5v2"/><path d="M4.6 4.6l1.4 1.4"/><path d="M18 18l1.4 1.4"/><path d="M2.5 12h2"/><path d="M19.5 12h2"/><path d="M4.6 19.4L6 18"/><path d="M18 6l1.4-1.4"/></svg>';
+var MOON_SVG = '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"><path d="M20 14.5A8 8 0 0 1 9.5 4a8 8 0 1 0 10.5 10.5z"/></svg>';
+
+function applySettings() {
+  var b = document.body;
+  var light = resolvedTheme() === 'light';
+  b.classList.toggle('light', light);
+  document.documentElement.classList.remove('pre-light');
+  b.setAttribute('data-accent', settings.accent);
+  b.classList.toggle('tint', !!settings.tint);
+  b.classList.toggle('compact', settings.density === 'compact');
+  b.classList.toggle('hide-ext', !settings.showExt);
+  var tb = document.getElementById('theme-btn');
+  if (tb) {
+    tb.innerHTML = light ? MOON_SVG : SUN_SVG;
+    tb.title = light ? 'Switch to dark mode' : 'Switch to light mode';
+    tb.setAttribute('aria-label', tb.title);
+  }
+}
+
+function setSetting(key, val) {
+  settings[key] = val;
+  saveSettings();
+  applySettings();
+  if (key === 'sort' || key === 'view' || key === 'viewPerFolder' || key === 'density' || key === 'showExt') {
+    applyView();
+    rerender();
+  }
+}
+
+function toggleTheme() {
+  setSetting('theme', resolvedTheme() === 'light' ? 'dark' : 'light');
+  if (settingsModal.classList.contains('open')) renderSettings();
+}
+document.getElementById('theme-btn').addEventListener('click', toggleTheme);
+try {
+  matchMedia('(prefers-color-scheme: light)').addEventListener('change', function(){
+    if (settings.theme === 'system') applySettings();
+  });
+} catch(e){}
+applySettings();
+
+// ── View (list / grid) ─────────────────────────────────────────────────────────
+function folderViews() {
+  try { return JSON.parse(localStorage.getItem('fd_views') || '{}') || {}; } catch(e){ return {}; }
+}
+function currentView() {
+  if (settings.viewPerFolder) {
+    var v = folderViews()[currentPath || '/'];
+    if (v === 'list' || v === 'grid') return v;
+  }
+  return settings.view;
+}
+function setView(v) {
+  if (settings.viewPerFolder) {
+    var m = folderViews();
+    m[currentPath || '/'] = v;
+    try { localStorage.setItem('fd_views', JSON.stringify(m)); } catch(e){}
+  } else {
+    settings.view = v;
+    saveSettings();
+  }
+  applyView();
+  rerender();
+}
+function applyView() {
+  var v = currentView();
+  list.classList.toggle('grid', v === 'grid');
+  list.classList.toggle('list', v !== 'grid');
+  document.getElementById('view-list').classList.toggle('on', v !== 'grid');
+  document.getElementById('view-grid').classList.toggle('on', v === 'grid');
+}
+document.getElementById('view-list').addEventListener('click', function(){ setView('list'); });
+document.getElementById('view-grid').addEventListener('click', function(){ setView('grid'); });
+applyView();
+
+// ── Toasts ─────────────────────────────────────────────────────────────────────
+// Status text is still written straight to #msg everywhere; this turns those
+// writes into a toast that fades out, and drops the old "// " terminal prefix.
+var msgTimer = null;
+new MutationObserver(function(){
+  var t = msg.textContent;
+  if (t.indexOf('// ') === 0) { msg.textContent = t.charAt(3).toUpperCase() + t.slice(4); return; }
+  clearTimeout(msgTimer);
+  if (!t) { msg.classList.remove('show'); return; }
+  msg.classList.add('show');
+  msgTimer = setTimeout(function(){ msg.classList.remove('show'); }, msg.className.indexOf('err') !== -1 ? 7000 : 3500);
+}).observe(msg, {childList:true, characterData:true, subtree:true});
 
 // ── Clipboard helper — works on HTTP ─────────────────────────────────────────
 function copyText(text, btn, originalLabel) {
   function done() {
-    if (btn) {
-      btn.textContent = '\u2714 copied';
+    if (!btn) return;
+    // icon-only buttons keep their icon and just flash green
+    if (btn.classList.contains('act')) {
       btn.classList.add('copied');
-      setTimeout(function(){ btn.textContent = originalLabel; btn.classList.remove('copied'); }, 1800);
+      setTimeout(function(){ btn.classList.remove('copied'); }, 1800);
+      return;
     }
+    btn.textContent = 'Copied';
+    setTimeout(function(){ btn.textContent = originalLabel; }, 1800);
   }
   if (navigator.clipboard && window.isSecureContext) {
     navigator.clipboard.writeText(text).then(done).catch(fallback);
@@ -1398,20 +1602,41 @@ function copyText(text, btn, originalLabel) {
 }
 
 // ── Drag and drop ──────────────────────────────────────────────────────────────
+// Files dragged in from the desktop can be dropped anywhere in the window and
+// land in the folder on screen. Folder rows, tree nodes and crumbs register their
+// own drop handlers (makeDropTarget) and stop propagation, so dropping onto one
+// of those uploads into that folder instead.
 var folderInput = document.getElementById('folder-input');
-var folderPickLink = document.getElementById('folder-pick-link');
-// A programmatic folderInput.click() dispatches a click that bubbles up to this
-// card. Without excluding the inputs themselves, that synthetic event re-opened
-// the plain file picker on top of the folder picker — which is why "upload a
-// folder" only ever offered files.
-drop.addEventListener('click', function(e){
-  if (e.target === fi || e.target === folderInput || e.target === folderPickLink) return;
-  fi.click();
+var dragDepth = 0;
+
+function isFileDrag(e) {
+  if (dragSrcPath !== null || SHARE_MODE) return false;
+  var t = e.dataTransfer && e.dataTransfer.types;
+  if (!t) return false;
+  for (var i = 0; i < t.length; i++) if (t[i] === 'Files') return true;
+  return false;
+}
+function endFileDrag() { dragDepth = 0; document.body.classList.remove('dragging-files'); }
+
+document.addEventListener('dragenter', function(e){
+  if (!isFileDrag(e)) return;
+  dragDepth++;
+  document.getElementById('drop-label').textContent =
+    'Drop to upload to ' + (currentPath ? currentPath.split('/').pop() : (SHARE_MODE ? SHARE_NAME : 'All files'));
+  document.body.classList.add('dragging-files');
 });
-drop.addEventListener('dragover', function(e){ e.preventDefault(); drop.classList.add('over'); });
-drop.addEventListener('dragleave', function(e){ if(!drop.contains(e.relatedTarget)) drop.classList.remove('over'); });
-drop.addEventListener('drop', function(e){
-  e.preventDefault(); drop.classList.remove('over');
+document.addEventListener('dragleave', function(e){
+  if (!isFileDrag(e)) return;
+  dragDepth = Math.max(0, dragDepth - 1);
+  if (!dragDepth) endFileDrag();
+});
+document.addEventListener('dragover', function(e){
+  if (isFileDrag(e)) { e.preventDefault(); e.dataTransfer.dropEffect = 'copy'; }
+});
+document.addEventListener('drop', function(e){
+  if (!isFileDrag(e)) { endFileDrag(); return; }
+  e.preventDefault();
+  endFileDrag();
   var items = e.dataTransfer.items;
   if (items && items.length && items[0].webkitGetAsEntry) {
     var entries = [];
@@ -1423,11 +1648,13 @@ drop.addEventListener('drop', function(e){
   }
   upload(e.dataTransfer.files);
 });
+document.addEventListener('dragend', endFileDrag);
+
 fi.addEventListener('change', function(){ upload(fi.files); fi.value=''; });
-if (folderPickLink) folderPickLink.addEventListener('click', function(e){ e.stopPropagation(); folderInput.click(); });
 if (folderInput) folderInput.addEventListener('change', function(){ uploadFileListWithRelPaths(folderInput.files); folderInput.value=''; });
-var folderUploadCompact = document.getElementById('folder-upload-compact');
-if (folderUploadCompact) folderUploadCompact.addEventListener('click', function(e){ e.stopPropagation(); });
+document.getElementById('upload-btn').addEventListener('click', function(){ fi.click(); });
+document.getElementById('folder-upload-btn').addEventListener('click', function(){ folderInput.click(); });
+document.getElementById('bb-upload').addEventListener('click', function(){ fi.click(); });
 
 // Walk dropped directory entries (webkitGetAsEntry) into a flat list of {file, relPath}
 function uploadEntries(entries) {
@@ -1596,13 +1823,21 @@ function uploadR2(files, idx, dest) {
 var noteInput  = document.getElementById('note-input');
 var noteSubmit = document.getElementById('note-submit');
 var pasteBtn   = document.getElementById('paste-btn');
+var noteModal  = document.getElementById('note-modal');
 
-noteInput.addEventListener('input', function(){
-  this.style.height='auto';
-  this.style.height=Math.min(this.scrollHeight, 160)+'px';
-});
+function openNote() {
+  closeMenu();
+  noteModal.classList.add('open');
+  setTimeout(function(){ noteInput.focus(); }, 30);
+}
+function closeNote() { noteModal.classList.remove('open'); }
+document.getElementById('new-note-btn').addEventListener('click', openNote);
+document.getElementById('bb-note').addEventListener('click', openNote);
+noteModal.addEventListener('click', function(e){ if (e.target === noteModal) closeNote(); });
+
 noteInput.addEventListener('keydown', function(e){
   if (e.key==='Enter' && !e.shiftKey){ e.preventDefault(); saveNote(); }
+  else if (e.key === 'Escape') { e.stopPropagation(); closeNote(); }
 });
 noteSubmit.addEventListener('click', saveNote);
 
@@ -1621,20 +1856,15 @@ noteInput.addEventListener('paste', function(e) {
   e.preventDefault();
   var ext = imageFile.type.split('/')[1] || 'png';
   var named = new File([imageFile], 'clipboard_' + Date.now() + '.' + ext, {type: imageFile.type});
+  closeNote();
   upload([named]);
-  var orig = pasteBtn.textContent;
-  pasteBtn.textContent = '\u2713 image captured';
-  setTimeout(function(){ pasteBtn.textContent = orig; }, 1800);
 });
-
 
 // Paste button — reads clipboard if available (HTTPS/localhost), otherwise focuses textarea
 pasteBtn.addEventListener('click', function() {
   if (navigator.clipboard && window.isSecureContext) {
     navigator.clipboard.readText().then(function(text) {
       noteInput.value = text;
-      noteInput.style.height = 'auto';
-      noteInput.style.height = Math.min(noteInput.scrollHeight, 160) + 'px';
       noteInput.focus();
     }).catch(function() {
       focusForManualPaste();
@@ -1647,8 +1877,8 @@ pasteBtn.addEventListener('click', function() {
 function focusForManualPaste() {
   noteInput.focus();
   noteInput.select();
-  pasteBtn.textContent = '\u23ce paste here';
-  setTimeout(function(){ pasteBtn.textContent = '\u21f3 Paste'; }, 2000);
+  pasteBtn.textContent = 'Press Ctrl+V';
+  setTimeout(function(){ pasteBtn.textContent = 'Paste'; }, 2000);
 }
 
 function saveNote() {
@@ -1656,13 +1886,19 @@ function saveNote() {
   if (!text) return;
   fetch('/note', {method:'POST', body:text})
     .then(function(r){
-      if (r.ok){ noteInput.value=''; noteInput.style.height=''; loadFiles(); }
-      else { msg.className='err'; msg.textContent='// note save failed'; }
+      if (r.ok){ noteInput.value=''; closeNote(); msg.className='ok'; msg.textContent='Note saved'; loadFiles(); }
+      else { msg.className='err'; msg.textContent='Could not save the note'; }
     })
-    .catch(function(){ msg.className='err'; msg.textContent='// network error'; });
+    .catch(function(){ msg.className='err'; msg.textContent='No connection to the server'; });
 }
 
 // ── Folder navigation ─────────────────────────────────────────────────────────
+var ROOT_LABEL = SHARE_MODE ? SHARE_NAME : 'All files';
+var CHEV_SVG = '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.4" stroke-linecap="round" stroke-linejoin="round"><path d="M9 6l6 6-6 6"/></svg>';
+var BC_SEP = '<span class="bc-sep"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M9 6l6 6-6 6"/></svg></span>';
+
+function joinPath(a, b) { return a ? a + '/' + b : b; }
+
 function navigateTo(path) {
   listSeq++;   // discard any listing still in flight for the old folder
   currentPath = path;
@@ -1670,35 +1906,161 @@ function navigateTo(path) {
   extFilter = null;
   closeExtMenu();
   renderBreadcrumb();
+  revealInTree(path);
+  renderTree();
+  applyView();
   loadFiles();
+  document.getElementById('main').scrollTop = 0;
 }
 
 function renderBreadcrumb() {
   if (!breadcrumbEl) return;
   var parts = currentPath ? currentPath.split('/').filter(Boolean) : [];
-  if (parts.length === 0) {
-    breadcrumbEl.style.display = 'none';
-    return;
-  }
-  breadcrumbEl.style.display = 'flex';
-  var html = '<span class="bc-item bc-root" data-path="">root</span>';
+  var html = parts.length
+    ? '<span class="bc-item" data-path="">' + esc(ROOT_LABEL) + '</span>'
+    : '<span class="bc-item bc-current">' + esc(ROOT_LABEL) + '</span>';
   var cumPath = '';
   for (var i = 0; i < parts.length; i++) {
     cumPath += (cumPath ? '/' : '') + parts[i];
-    var isLast = i === parts.length - 1;
-    html += '<span class="bc-sep">/</span>';
-    if (isLast) {
-      html += '<span class="bc-item bc-current">' + esc(parts[i]) + '</span>';
-    } else {
-      html += '<span class="bc-item" data-path="' + esc(cumPath) + '">' + esc(parts[i]) + '</span>';
-    }
+    html += BC_SEP;
+    if (i === parts.length - 1) html += '<span class="bc-item bc-current">' + esc(parts[i]) + '</span>';
+    else html += '<span class="bc-item" data-path="' + esc(cumPath) + '">' + esc(parts[i]) + '</span>';
   }
   breadcrumbEl.innerHTML = html;
   breadcrumbEl.querySelectorAll('[data-path]').forEach(function(el) {
-    el.addEventListener('click', function() { navigateTo(this.dataset.path); });
+    el.addEventListener('click', function() { clearSearch(); navigateTo(this.dataset.path); });
     makeDropTarget(el, el.dataset.path);   // drop onto a crumb to move up a level
   });
+  var title = parts.length ? parts[parts.length - 1] : ROOT_LABEL;
+  document.getElementById('folder-title').textContent = title;
+  document.title = (parts.length ? title + ' · ' : '') + 'FileDrop';
 }
+
+// ── Sidebar: folder tree ──────────────────────────────────────────────────────
+// Children load lazily, one folder at a time, so a deep tree costs nothing until
+// it is opened. The listing of the folder on screen also refreshes its node.
+var treeEl = document.getElementById('tree');
+var treeKids = {};          // path -> sorted child folder names
+var treeOpen = {'': true};
+var treeLoading = {};
+
+function setTreeKids(path, files) {
+  var dirs = [];
+  (files || []).forEach(function(f){
+    if (f.is_dir && !(f.locked && !f.unlocked)) dirs.push(f.name.split('/').pop());
+  });
+  dirs.sort(function(a, b){ return a.localeCompare(b, undefined, {numeric:true, sensitivity:'base'}); });
+  var prev = treeKids[path];
+  treeKids[path] = dirs;
+  return !prev || prev.join('\n') !== dirs.join('\n');
+}
+
+function loadTreeKids(path) {
+  if (treeLoading[path]) return;
+  treeLoading[path] = true;
+  fetch('/files' + (path ? '?path=' + encodeURIComponent(path) : ''))
+    .then(function(r){ return r.ok ? r.json() : []; })
+    .then(function(files){ treeLoading[path] = false; setTreeKids(path, files); renderTree(); })
+    .catch(function(){ treeLoading[path] = false; });
+}
+
+function renderTree() {
+  var html = [];
+  function walk(path, label, depth) {
+    var kids = treeKids[path];
+    var open = !!treeOpen[path];
+    var leaf = kids && kids.length === 0;
+    html.push('<div class="tree-row' + (path === currentPath ? ' active' : '') + '" data-path="' + esc(path) +
+      '" style="padding-left:' + (2 + depth * 16) + 'px">' +
+      '<button class="tree-chev' + (open ? ' open' : '') + (leaf ? ' leaf' : '') + '" data-toggle="' + esc(path) +
+      '" aria-label="' + (open ? 'Collapse ' : 'Expand ') + esc(label) + '">' + CHEV_SVG + '</button>' +
+      '<span class="ico">' + typeIcon('folder') + '</span><span class="nm">' + esc(label) + '</span></div>');
+    if (open && kids) kids.forEach(function(n){ walk(joinPath(path, n), n, depth + 1); });
+  }
+  walk('', ROOT_LABEL, 0);
+  treeEl.innerHTML = html.join('');
+  treeEl.querySelectorAll('.tree-row').forEach(function(row){
+    var p = row.getAttribute('data-path');
+    row.addEventListener('click', function(e){
+      if (e.target.closest('.tree-chev')) return;
+      closeDrawer();
+      if (p !== currentPath || (searchInput && searchInput.value)) { clearSearch(); navigateTo(p); }
+    });
+    makeDropTarget(row, p);
+  });
+  treeEl.querySelectorAll('.tree-chev').forEach(function(b){
+    b.addEventListener('click', function(e){
+      e.stopPropagation();
+      var p = b.getAttribute('data-toggle');
+      treeOpen[p] = !treeOpen[p];
+      if (treeOpen[p] && !treeKids[p]) loadTreeKids(p);
+      renderTree();
+    });
+  });
+}
+
+// Opens every ancestor of path so the folder on screen is always visible.
+function revealInTree(path) {
+  var parts = path ? path.split('/') : [];
+  var cum = '';
+  treeOpen[''] = true;
+  if (!treeKids['']) loadTreeKids('');
+  for (var i = 0; i < parts.length - 1; i++) {
+    cum = joinPath(cum, parts[i]);
+    treeOpen[cum] = true;
+    if (!treeKids[cum]) loadTreeKids(cum);
+  }
+}
+
+// ── Sidebar: pinned items ─────────────────────────────────────────────────────
+var pinsCache = [];
+function loadPins() {
+  if (!PRIVATE_SERVER || SHARE_MODE) return;
+  fetch('/pins').then(function(r){ return r.ok ? r.json() : []; })
+    .then(function(p){ pinsCache = p || []; renderPins(); })
+    .catch(function(){});
+}
+function renderPins() {
+  var side = document.getElementById('pin-list');
+  var strip = document.getElementById('pin-strip');
+  if (!pinsCache.length) {
+    side.innerHTML = '<div class="side-empty">Pin files or folders from their menu</div>';
+    strip.innerHTML = '';
+    strip.classList.add('hidden');
+    return;
+  }
+  var rows = '', chips = '';
+  pinsCache.forEach(function(p, i){
+    var name = p.path.split('/').pop();
+    var k = p.is_dir ? 'folder' : (p.is_note ? 'note' : kindOf(extOf(name)));
+    var ico = '<span style="color:var(--k);display:flex">' + typeIcon(k) + '</span>';
+    rows += '<div class="side-row k-' + k + '" data-i="' + i + '" title="' + esc(p.path) + '">' + ico + '<span class="nm">' + esc(name) + '</span></div>';
+    chips += '<button class="pin-chip k-' + k + '" data-i="' + i + '">' + ico + esc(name) + '</button>';
+  });
+  side.innerHTML = rows;
+  strip.innerHTML = chips;
+  strip.classList.remove('hidden');
+  [side, strip].forEach(function(root){
+    root.querySelectorAll('[data-i]').forEach(function(el){
+      el.addEventListener('click', function(){ openPinned(pinsCache[+el.getAttribute('data-i')]); });
+    });
+  });
+}
+function openPinned(p) {
+  if (!p) return;
+  closeDrawer();
+  clearSearch();
+  if (p.is_dir) { navigateTo(p.path); return; }
+  var parent = parentOf(p.path);
+  if (parent !== currentPath) navigateTo(parent);
+  if (p.is_note) openNotePreview(p.path); else openPreview(p.path);
+}
+
+// ── Phone drawer ──────────────────────────────────────────────────────────────
+function openDrawer() { document.body.classList.add('drawer-open'); }
+function closeDrawer() { document.body.classList.remove('drawer-open'); }
+document.getElementById('menu-toggle').addEventListener('click', openDrawer);
+document.getElementById('scrim').addEventListener('click', closeDrawer);
 
 // ── File list ─────────────────────────────────────────────────────────────────
 // ── Listing requests ──────────────────────────────────────────────────────────
@@ -1716,13 +2078,18 @@ function loadFiles() {
   if (showLocked) url += (url.indexOf('?') === -1 ? '?' : '&') + 'locked=1';
   fetch(url).then(function(r){return r.json();}).then(function(files){
     if (seq !== listSeq || forPath !== currentPath) return;   // superseded
+    if (setTreeKids(forPath, files)) renderTree();
+    // a search owns the list: refresh its results instead of swapping in the folder
+    var q = searchInput ? searchInput.value.trim() : '';
+    if (q) { loadSearch(q); return; }
     currentFiles = files || [];
     lastFilesJSON = JSON.stringify(files);
     renderList(currentFiles);
   }).catch(function(){
     if (seq !== listSeq || forPath !== currentPath) return;
-    list.innerHTML='<div class="empty-state">// error loading</div>';
+    list.innerHTML = '<div class="empty-state"><b>Could not load this folder</b>Check the connection and reload</div>';
   });
+  loadPins();
 }
 
 // ── Optimistic updates ────────────────────────────────────────────────────────
@@ -1943,7 +2310,7 @@ function closePrompt() {
 }
 
 function promptError(t) {
-  promptErr.textContent = '// ' + t;
+  promptErr.textContent = t.charAt(0).toUpperCase() + t.slice(1);
   promptErr.style.display = 'block';
 }
 
@@ -2010,22 +2377,55 @@ function handOffToPlayer(path) {
     });
 }
 
+// Pinned items stay on top whatever the sort; within each group the chosen key
+// applies. "recent" keeps the server's order, which is already newest-first.
+function sortFiles(files) {
+  if (settings.sort === 'recent') return files;
+  var key = settings.sort;
+  var cmpName = function(a, b){ return a.name.localeCompare(b.name, undefined, {numeric:true, sensitivity:'base'}); };
+  var cmp = {
+    name: cmpName,
+    size: function(a, b){ return (b.is_dir ? -1 : (b.size || 0)) - (a.is_dir ? -1 : (a.size || 0)) || cmpName(a, b); },
+    type: function(a, b){
+      var ka = a.is_dir ? '0' : (a.is_note ? '1' : extOf(a.name) || '~');
+      var kb = b.is_dir ? '0' : (b.is_note ? '1' : extOf(b.name) || '~');
+      return ka < kb ? -1 : ka > kb ? 1 : cmpName(a, b);
+    }
+  }[key];
+  if (!cmp) return files;
+  var pinned = files.filter(function(f){ return f.pinned; });
+  var rest = files.filter(function(f){ return !f.pinned; });
+  return pinned.concat(rest.slice().sort(cmp));
+}
+
+var listHeadSlot = document.getElementById('list-head-slot');
+function renderListHead(show) {
+  listHeadSlot.innerHTML = show && currentView() !== 'grid'
+    ? '<div class="list-head"><span style="width:40px"></span><span class="lh-name">Name</span>' +
+      '<span class="col-size">Size</span><span class="col-date">Modified</span><span style="width:112px"></span></div>'
+    : '';
+}
+
 function renderList(files) {
   files = files || [];
   syncExtMenu(files);
-  var shown = visibleFiles(files);
+  var shown = sortFiles(visibleFiles(files));
   list.innerHTML = '';
   if (!shown.length) {
+    renderListHead(false);
     if (extFilter !== null) {
       divT.textContent = extFilter ? 'No ' + extLabel(extFilter) + ' files here'
                                    : 'No files without an extension here';
-      list.innerHTML = '<div class="empty-state">// nothing matches this filter</div>';
+      list.innerHTML = '<div class="empty-state"><b>Nothing matches this filter</b>Pick another type above</div>';
     } else {
-      divT.textContent = currentPath ? 'Empty folder' : 'Empty';
-      list.innerHTML = '<div class="empty-state">// nothing here yet</div>';
+      divT.textContent = 'Empty folder';
+      list.innerHTML = SHARE_MODE
+        ? '<div class="empty-state"><b>This folder is empty</b></div>'
+        : '<div class="empty-state"><b>Nothing here yet</b>Drop files anywhere, or use Upload</div>';
     }
     return;
   }
+  renderListHead(true);
   divT.textContent = countLabel(shown) || 'Empty';
   appendRows(shown);
 }
@@ -2033,13 +2433,16 @@ function renderList(files) {
 function renderSearchList(files, q) {
   files = files || [];
   syncExtMenu(files);
-  var shown = visibleFiles(files);
+  var shown = sortFiles(visibleFiles(files));
   list.innerHTML = '';
+  document.getElementById('folder-title').textContent = 'Search';
   if (!shown.length) {
+    renderListHead(false);
     divT.textContent = 'No results for "' + q + '"';
-    list.innerHTML = '<div class="empty-state">// nothing matched</div>';
+    list.innerHTML = '<div class="empty-state"><b>No results</b>Nothing matched "' + esc(q) + '"</div>';
     return;
   }
+  renderListHead(true);
   divT.textContent = shown.length + ' result' + (shown.length !== 1 ? 's' : '') + ' for "' + q + '"';
   appendRows(shown);
 }
@@ -2095,6 +2498,7 @@ function makeDropTarget(el, folderPath) {
     e.preventDefault();
     e.stopPropagation();
     el.classList.remove('drop-target');
+    endFileDrag();
     if (dragSrcPath !== null) {
       var src = dragSrcPath;
       dragSrcPath = null;
@@ -2229,6 +2633,7 @@ function fileMenuActions(p, kind) {
   var a = [{label:'Open', fn:function(){ kind === 'note' ? openNotePreview(p) : openPreview(p); }}];
   if (SHARE_MODE) { a.push({sep:true}); a.push({label:'Download', fn:function(){ dlFile(p); }}); return a; }
   a.push({sep:true});
+  addPinAction(a, p);
   a.push({label:'Select', fn:function(){ selectOnly(p); }});
   a.push({label:'Copy',   fn:function(){ clipCopy([p]); }});
   a.push({label:'Cut',    fn:function(){ clipCut([p]); }});
@@ -2248,6 +2653,7 @@ function dirMenuActions(p) {
   var a = [{label:'Open', fn:function(){ navigateTo(p); }}];
   if (SHARE_MODE) return a;
   a.push({sep:true});
+  addPinAction(a, p);
   a.push({label:'Select', fn:function(){ selectOnly(p); }});
   a.push({label:'Copy',   fn:function(){ clipCopy([p]); }});
   a.push({label:'Cut',    fn:function(){ clipCut([p]); }});
@@ -2331,13 +2737,13 @@ function renderMoveList() {
         html += '<button class="move-row' + (self ? ' disabled' : '') + '" data-into="' + esc(full) + '"' +
                 (self ? ' disabled' : '') + '>' + esc(dirs[i].name.split('/').pop()) + '</button>';
       }
-      moveList.innerHTML = html || '<div class="move-empty">// no subfolders here</div>';
+      moveList.innerHTML = html || '<div class="move-empty">No subfolders here</div>';
       var rows = moveList.querySelectorAll('[data-into]');
       for (var k = 0; k < rows.length; k++) {
         rows[k].addEventListener('click', function(){ moveDest = this.getAttribute('data-into'); renderMoveList(); });
       }
     })
-    .catch(function(){ moveList.innerHTML = '<div class="move-empty">// could not load folders</div>'; });
+    .catch(function(){ moveList.innerHTML = '<div class="move-empty">Could not load folders</div>'; });
 }
 
 function confirmMove() {
@@ -2379,7 +2785,7 @@ function closePw() {
 }
 
 function pwError(t) {
-  pwErr.textContent = '// ' + t;
+  pwErr.textContent = t.charAt(0).toUpperCase() + t.slice(1);
   pwErr.style.display = 'block';
   pwInput.focus();
   pwInput.select();
@@ -2448,18 +2854,53 @@ function removeLockItem(p) {
   });
 }
 
+function pinStateOf(path) {
+  for (var i = 0; i < currentFiles.length; i++) {
+    var full = currentPath ? currentPath + '/' + currentFiles[i].name : currentFiles[i].name;
+    if (full === path) return currentFiles[i];
+  }
+  return null;
+}
+
+function pinItem(p) {
+  fetch('/pin?name=' + encodeURIComponent(p), {method:'POST'})
+    .then(function(r){
+      if (r.ok) { msg.className='ok'; msg.textContent='// pinned ' + p.split('/').pop(); loadFiles(); return; }
+      r.text().then(function(t){ msg.className='err'; msg.textContent='// ' + (t.trim() || 'could not pin'); });
+    })
+    .catch(function(){ msg.className='err'; msg.textContent='// network error'; });
+}
+
+function unpinItem(p) {
+  fetch('/unpin?name=' + encodeURIComponent(p), {method:'POST'})
+    .then(function(r){
+      if (r.ok) { msg.className='ok'; msg.textContent='// unpinned ' + p.split('/').pop(); loadFiles(); return; }
+      r.text().then(function(t){ msg.className='err'; msg.textContent='// ' + (t.trim() || 'could not unpin'); });
+    })
+    .catch(function(){ msg.className='err'; msg.textContent='// network error'; });
+}
+
+function addPinAction(a, p) {
+  if (!PRIVATE_SERVER) return;
+  var st = pinStateOf(p);
+  if (st && st.pinned) a.push({label:'Unpin', fn:function(){ unpinItem(p); }});
+  else a.push({label:'Pin', fn:function(){ pinItem(p); }});
+}
+
 // A still-locked entry: greyed, and inert apart from the click that asks for the
 // password. No menu, no drag, no selection — there is nothing to act on yet.
 function makeLockedRow(f) {
   var el = document.createElement('div');
-  el.className = 'file-item locked-row';
+  el.className = 'file-item locked-row k-lock';
   var p = currentPath ? currentPath + '/' + f.name : f.name;
+  var label = (f.is_dir ? 'Locked folder' : 'Locked') + ' · click to unlock';
   el.innerHTML =
-    '<div class="file-thumb ft-lock">&#x1F512;</div>' +
+    '<div class="ft-tile">' + typeIcon('lock') + '</div>' +
     '<div class="file-info-col">' +
       '<div class="file-name">' + esc(f.name.split('/').pop()) + '</div>' +
-      '<div class="file-type-date">' + (f.is_dir ? 'Locked folder' : 'Locked') + ' &#xB7; click to unlock</div>' +
+      '<div class="file-type-date">' + label + '</div>' +
     '</div>' +
+    '<div class="col-size"></div><div class="col-date"></div>' +
     '<div class="file-actions"></div>';
   el.addEventListener('click', function(){ unlockItem(p); });
   return el;
@@ -2536,43 +2977,115 @@ function renderShareBanner() {
   if (!wrap) return;
   // a visitor already is inside the share; the banner is for the owner
   if (SHARE_MODE || !currentPath) { wrap.style.display = 'none'; return; }
-  fetch('/share-info?name=' + encodeURIComponent(currentPath))
+  var forPath = currentPath;
+  fetch('/share-info?name=' + encodeURIComponent(forPath))
     .then(function(r){ return r.ok ? r.json() : null; })
     .then(function(d){
+      if (forPath !== currentPath) return;
       if (!d || !d.url) { wrap.style.display = 'none'; return; }
       wrap.style.display = 'flex';
       wrap.innerHTML =
-        '<img class="share-qr" src="/qr.png?data=' + encodeURIComponent(d.url) + '" alt="QR code">' +
-        '<a class="share-copy" href="#">copy link</a>' +
-        '<div class="share-url">' + esc(d.url) + '</div>';
-      wrap.querySelector('.share-copy').addEventListener('click', function(e){
-        e.preventDefault();
-        copyText(d.url, null, '');
-        msg.className = 'ok';
-        msg.textContent = '// link copied';
+        '<img class="share-qr" src="/qr.png?data=' + encodeURIComponent(d.url) + '" alt="QR code for the share link">' +
+        '<div class="share-info">' +
+          '<div class="share-title">This folder is shared</div>' +
+          '<div class="share-url">' + esc(d.url) + '</div>' +
+          '<div class="share-links"><button class="folder-btn primary share-copy">Copy link</button>' +
+          '<button class="folder-btn share-stop">Stop sharing</button></div>' +
+        '</div>';
+      wrap.querySelector('.share-copy').addEventListener('click', function(){
+        copyText(d.url, this, 'Copy link');
+      });
+      wrap.querySelector('.share-stop').addEventListener('click', function(){
+        fetch('/unshare?name=' + encodeURIComponent(forPath), {method:'POST'})
+          .then(function(r){
+            if (!r.ok) throw new Error();
+            msg.className = 'ok'; msg.textContent = 'Stopped sharing ' + forPath.split('/').pop();
+            renderShareBanner();
+          })
+          .catch(function(){ msg.className = 'err'; msg.textContent = 'Could not stop sharing'; });
       });
     })
     .catch(function(){ wrap.style.display = 'none'; });
 }
+
+// ── Icons & file kinds ────────────────────────────────────────────────────────
+var ICON_PATHS = {
+  folder: '<path d="M3 7.5A2.5 2.5 0 0 1 5.5 5h3.6l2 2.2h7.4A2.5 2.5 0 0 1 21 9.7v7.8a2.5 2.5 0 0 1-2.5 2.5h-13A2.5 2.5 0 0 1 3 17.5z" fill="currentColor" fill-opacity=".18"/>',
+  image: '<rect x="3" y="3" width="18" height="18" rx="4"/><circle cx="9" cy="9" r="1.8"/><path d="M21 15.5l-4.8-4.8L5.5 21"/>',
+  video: '<rect x="2.5" y="5.5" width="14" height="13" rx="3"/><path d="M16.5 10.2l5-3v9.6l-5-3z"/>',
+  audio: '<path d="M9 18V5.5l11-2V16"/><circle cx="6" cy="18" r="3"/><circle cx="17" cy="16" r="3"/>',
+  pdf: '<path d="M14 3H7.5A2.5 2.5 0 0 0 5 5.5v13A2.5 2.5 0 0 0 7.5 21h9a2.5 2.5 0 0 0 2.5-2.5V8z"/><path d="M14 3v5h5"/><path d="M8.5 15.5h7"/><path d="M8.5 12h3"/>',
+  doc: '<path d="M14 3H7.5A2.5 2.5 0 0 0 5 5.5v13A2.5 2.5 0 0 0 7.5 21h9a2.5 2.5 0 0 0 2.5-2.5V8z"/><path d="M14 3v5h5"/><path d="M8.5 12.5h7"/><path d="M8.5 16h7"/>',
+  note: '<path d="M4 6.5A2.5 2.5 0 0 1 6.5 4h11A2.5 2.5 0 0 1 20 6.5V15l-5 5H6.5A2.5 2.5 0 0 1 4 17.5z"/><path d="M15 20v-3.5a1.5 1.5 0 0 1 1.5-1.5H20"/><path d="M8 9h8"/><path d="M8 12.5h5"/>',
+  archive: '<rect x="3" y="4" width="18" height="5" rx="1.5"/><path d="M5 9v9.5A1.5 1.5 0 0 0 6.5 20h11a1.5 1.5 0 0 0 1.5-1.5V9"/><path d="M10 13h4"/>',
+  code: '<path d="M8.5 8l-4.5 4 4.5 4"/><path d="M15.5 8l4.5 4-4.5 4"/><path d="M13.5 5l-3 14"/>',
+  lock: '<rect x="5" y="10.5" width="14" height="10" rx="2.5"/><path d="M8 10.5V8a4 4 0 0 1 8 0v2.5"/>'
+};
+function typeIcon(k) {
+  return '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round">' +
+         (ICON_PATHS[k] || ICON_PATHS.doc) + '</svg>';
+}
+function svgIcon(body, fill) {
+  return '<svg viewBox="0 0 24 24" fill="' + (fill ? 'currentColor' : 'none') + '" stroke="' + (fill ? 'none' : 'currentColor') +
+         '" stroke-width="1.9" stroke-linecap="round" stroke-linejoin="round">' + body + '</svg>';
+}
+var SVG = {
+  eye:   svgIcon('<path d="M2.5 12S6 5.5 12 5.5 21.5 12 21.5 12 18 18.5 12 18.5 2.5 12 2.5 12z"/><circle cx="12" cy="12" r="2.8"/>'),
+  dl:    svgIcon('<path d="M12 4v11"/><path d="M7 10.5l5 5 5-5"/><path d="M5 20h14"/>'),
+  more:  svgIcon('<circle cx="5.5" cy="12" r="1.7"/><circle cx="12" cy="12" r="1.7"/><circle cx="18.5" cy="12" r="1.7"/>', true),
+  open:  svgIcon('<path d="M9 6l6 6-6 6"/>'),
+  copy:  svgIcon('<rect x="8.5" y="8.5" width="11" height="11" rx="2.5"/><path d="M15.5 8.5V6.5A2 2 0 0 0 13.5 4.5h-7a2 2 0 0 0-2 2v7a2 2 0 0 0 2 2h2"/>'),
+  check: svgIcon('<path d="M5 12.5l4.5 4.5L19 7.5"/>'),
+  x:     svgIcon('<path d="M6 6l12 12"/><path d="M18 6L6 18"/>'),
+  play:  svgIcon('<path d="M8 5.5v13l11-6.5z"/>', true),
+  pin:   svgIcon('<path d="M15 3l6 6-3 1-3.5 3.5L14 18l-2 2-8-8 2-2 4.5-.5L14 6z"/>', true)
+};
+var IMG_THUMB_EXTS = ['jpg','jpeg','png','gif','webp','svg'];
+function kindOf(ext) {
+  if (IMG_THUMB_EXTS.indexOf(ext) !== -1 || ['bmp','avif','heic','tiff'].indexOf(ext) !== -1) return 'image';
+  if (['mp4','webm','mov','m4v','mkv','avi','wmv','flv','ts','m2ts','mpg','mpeg'].indexOf(ext) !== -1) return 'video';
+  if (['mp3','wav','ogg','flac','aac','m4a','opus'].indexOf(ext) !== -1) return 'audio';
+  if (ext === 'pdf') return 'pdf';
+  if (['zip','rar','7z','tar','gz','bz2','xz','iso','apk','dmg'].indexOf(ext) !== -1) return 'archive';
+  if (['js','go','py','rs','kt','java','c','cpp','h','cs','css','html','json','sh','ps1','yml','yaml','xml','sql','rb','php','swift','env'].indexOf(ext) !== -1) return 'code';
+  return 'doc';
+}
+// The type icon sits underneath; a thumbnail that loads covers it, one that
+// fails removes itself and the icon shows through.
+function tileInner(ext, path, kind) {
+  if (IMG_THUMB_EXTS.indexOf(ext) !== -1)
+    return typeIcon('image') + '<img src="/file?name=' + encodeURIComponent(path) + '" alt="" loading="lazy" onerror="this.remove()">';
+  if (kind === 'video' && VIDEO_TOOLS && thumbExts.indexOf(ext) !== -1)
+    return typeIcon('video') + '<img src="/thumb?name=' + encodeURIComponent(path) + '" alt="" loading="lazy"' +
+           ' onload="this.parentNode.querySelector(\'.ft-play\').style.visibility=\'visible\'" onerror="this.remove()">' +
+           '<span class="ft-play" style="visibility:hidden">' + SVG.play + '</span>';
+  return typeIcon(kind);
+}
+function pinIco(f) { return f.pinned ? '<span class="pin-ico" title="Pinned">' + SVG.pin + '</span>' : ''; }
+
 function makeDirRow(f) {
   var el = document.createElement('div');
-  el.className = 'file-item dir-item';
+  el.className = 'file-item dir-item k-folder';
   el.style.cursor = 'pointer';
   var dirPath = currentPath ? currentPath+'/'+f.name : f.name;
   var displayName = f.name.split('/').pop();
   var parentDir = f.name.includes('/') ? f.name.slice(0, f.name.lastIndexOf('/')) : '';
-  var checkHtml = selectMode ? '<label class="row-check"><input type="checkbox"'+(selectedPaths.has(dirPath)?' checked':'')+' data-path="'+esc(dirPath)+'"></label>' : '';
+  var checkHtml = selectMode ? '<label class="row-check"><input type="checkbox"'+(selectedPaths.has(dirPath)?' checked':'')+' data-path="'+esc(dirPath)+'" aria-label="Select folder"></label>' : '';
+  var when = fmtDate(f.modified);
   el.innerHTML =
     checkHtml+
-    '<div class="file-thumb ft-dir">DIR</div>'+
-    '<div class="file-info-col" style="cursor:pointer">'+
-      '<div class="file-name dir-name">'+esc(displayName)+'</div>'+
-      '<div class="file-type-date">Folder'+(fmtDate(f.modified)?' &#xB7; '+fmtDate(f.modified):'')+(parentDir?' &#xB7; <span style="opacity:.6">'+esc(parentDir)+'</span>':'')+'</div>'+
+    '<div class="ft-tile">'+typeIcon('folder')+'</div>'+
+    '<div class="file-info-col">'+
+      '<div class="file-name">'+esc(displayName)+pinIco(f)+'</div>'+
+      '<div class="file-type-date"><span class="meta-list">Folder'+(parentDir?' · '+esc(parentDir):'')+'</span>'+
+        '<span class="meta-grid">Folder'+(when?' · '+when:'')+'</span></div>'+
     '</div>'+
+    '<div class="col-size">—</div>'+
+    '<div class="col-date">'+when+'</div>'+
     '<div class="file-actions">'+
-      '<button class="view-btn" title="Open">\u25B7 <span class="btn-lbl">open</span></button>'+
-      (!R2_MODE ? '<div class="action-sep"></div><button class="dl-btn" title="Download as zip">\u2193 <span class="btn-lbl">dl</span></button>' : '')+
-      '<button class="menu-btn" title="Options">\u22EE</button>'+
+      '<button class="act view-btn" title="Open" aria-label="Open">'+SVG.open+'</button>'+
+      (!R2_MODE ? '<button class="act dl-btn" title="Download as zip" aria-label="Download as zip">'+SVG.dl+'</button>' : '')+
+      '<button class="act menu-btn" title="More" aria-label="More actions">'+SVG.more+'</button>'+
     '</div>';
   if (selectMode) {
     var cb = el.querySelector('input[type=checkbox]');
@@ -2582,7 +3095,7 @@ function makeDirRow(f) {
     });
     cb.addEventListener('change', function() { toggleSelect(dirPath, this.checked); });
   } else {
-    var enterDir = (function(p){ return function(){ navigateTo(p); }; })(dirPath);
+    var enterDir = (function(p){ return function(){ clearSearch(); navigateTo(p); }; })(dirPath);
     el.querySelector('.view-btn').addEventListener('click', function(e){ e.stopPropagation(); enterDir(); });
     el.addEventListener('click', function(e){
       if (e.target.closest('button,input,label')) return;
@@ -2611,20 +3124,15 @@ function noteRowButtons(row, editing) {
   var copy = row.querySelector('.copy-btn');
   var view = row.querySelector('.view-btn');
   if (!copy || !view) return;
+  row.classList.toggle('editing-row', editing);
   if (editing) {
-    copy.innerHTML = '✓ <span class="btn-lbl">save</span>';
-    copy.title = 'Save';
-    view.innerHTML = '✕ <span class="btn-lbl">cancel</span>';
-    view.title = 'Cancel';
+    copy.innerHTML = SVG.check; copy.title = 'Save'; copy.setAttribute('aria-label', 'Save');
+    view.innerHTML = SVG.x;     view.title = 'Cancel'; view.setAttribute('aria-label', 'Cancel');
     copy.classList.add('save-btn');
-    view.classList.add('cancel-btn');
   } else {
-    copy.innerHTML = '⎘ <span class="btn-lbl">copy</span>';
-    copy.title = 'Copy text';
-    view.innerHTML = '▷ <span class="btn-lbl">view</span>';
-    view.title = 'Preview';
+    copy.innerHTML = SVG.copy;  copy.title = 'Copy text'; copy.setAttribute('aria-label', 'Copy text');
+    view.innerHTML = SVG.eye;   view.title = 'Open'; view.setAttribute('aria-label', 'Open');
     copy.classList.remove('save-btn');
-    view.classList.remove('cancel-btn');
   }
 }
 
@@ -2705,22 +3213,25 @@ function startInlineEdit(el, p, truncated) {
 }
 function makeNoteRow(f) {
   var el = document.createElement('div');
-  el.className = 'note-item';
+  el.className = 'note-item k-note';
   var notePath = currentPath ? currentPath+'/'+f.name : f.name;
   var parentDir = f.name.includes('/') ? f.name.slice(0, f.name.lastIndexOf('/')) : '';
-  var checkHtml = selectMode ? '<label class="row-check"><input type="checkbox"'+(selectedPaths.has(notePath)?' checked':'')+' data-path="'+esc(notePath)+'"></label>' : '';
+  var checkHtml = selectMode ? '<label class="row-check"><input type="checkbox"'+(selectedPaths.has(notePath)?' checked':'')+' data-path="'+esc(notePath)+'" aria-label="Select note"></label>' : '';
+  var when = fmtDate(f.modified);
   el.innerHTML =
     checkHtml+
-    '<div>'+
+    '<div class="ft-tile">'+typeIcon('note')+'</div>'+
+    '<div class="note-body">'+
       '<div class="note-snippet">'+esc(f.snippet||'')+'</div>'+
-      '<div class="note-meta">Note \u00B7 '+fmtDate(f.modified)+(parentDir?' \u00B7 <span style="opacity:.6">'+esc(parentDir)+'</span>':'')+'</div>'+
+      '<div class="note-meta">Note'+pinIco(f)+(when?' · '+when:'')+(parentDir?' · '+esc(parentDir):'')+'</div>'+
     '</div>'+
-    '<div class="note-actions">'+
-      '<button class="copy-btn" title="Copy text">\u2398 <span class="btn-lbl">copy</span></button>'+
-      '<div class="action-sep"></div>'+
-      '<button class="view-btn" title="Preview">\u25B7 <span class="btn-lbl">view</span></button>'+
-    '</div>'+
-    '<button class="menu-btn" title="Options">\u22EE</button>';
+    '<div class="col-size">'+fmtSize(f.size||0)+'</div>'+
+    '<div class="col-date">'+when+'</div>'+
+    '<div class="file-actions note-actions">'+
+      '<button class="act copy-btn" title="Copy text" aria-label="Copy text">'+SVG.copy+'</button>'+
+      '<button class="act view-btn" title="Open" aria-label="Open">'+SVG.eye+'</button>'+
+      '<button class="act menu-btn" title="More" aria-label="More actions">'+SVG.more+'</button>'+
+    '</div>';
   if (selectMode) {
     var cb = el.querySelector('input[type=checkbox]');
     el.addEventListener('click', function(e) {
@@ -2746,7 +3257,7 @@ function makeNoteRow(f) {
         e.stopPropagation();
         if (inlineEditing === snip) { endInlineEdit(true); return; }   // acting as Save
         fetch('/file?name='+encodeURIComponent(p)).then(function(r){return r.text();}).then(function(text){
-          copyText(text, btn, '⎘');
+          copyText(text, btn, '');
         });
       };
     })(notePath, copyBtn));
@@ -2777,22 +3288,27 @@ function makeFileRow(f) {
   var canOpen = !!kind || externalPlayerExts.indexOf(ext) !== -1;
   var filePath = currentPath ? currentPath+'/'+f.name : f.name;
   var parentDir = f.name.includes('/') ? f.name.slice(0, f.name.lastIndexOf('/')) : '';
-  var checkHtml = selectMode ? '<label class="row-check"><input type="checkbox"'+(selectedPaths.has(filePath)?' checked':'')+' data-path="'+esc(filePath)+'"></label>' : '';
+  var checkHtml = selectMode ? '<label class="row-check"><input type="checkbox"'+(selectedPaths.has(filePath)?' checked':'')+' data-path="'+esc(filePath)+'" aria-label="Select file"></label>' : '';
+  var tk = kindOf(ext);
   var el = document.createElement('div');
-  el.className = 'file-item';
-  var metaLine = fileType(ext)+' \u00B7 '+fmtDate(f.modified)+' \u00B7 '+fmtSize(f.size)+(parentDir?' \u00B7 <span style="opacity:.6">'+esc(parentDir)+'</span>':'');
+  el.className = 'file-item k-' + tk;
+  var when = fmtDate(f.modified);
+  var where = parentDir ? ' · '+esc(parentDir) : '';
   el.innerHTML =
     checkHtml+
-    '<div class="file-thumb '+thumbCls(ext)+'">'+thumb(displayName,ext,filePath)+'</div>'+
+    '<div class="ft-tile">'+tileInner(ext, filePath, tk)+'</div>'+
     '<div class="file-info-col">'+
-      '<div class="file-name">'+esc(base)+'<span class="file-name-ext">'+(ext?'.'+esc(ext):'')+'</span></div>'+
-      '<div class="file-type-date">'+metaLine+'</div>'+
+      '<div class="file-name">'+esc(base)+'<span class="file-name-ext">'+(ext?'.'+esc(ext):'')+'</span>'+pinIco(f)+'</div>'+
+      '<div class="file-type-date"><span class="meta-list">'+fileType(ext)+where+'</span>'+
+        '<span class="meta-grid">'+fmtSize(f.size)+(when?' · '+when:'')+'</span></div>'+
       (f.snippet?'<div class="search-snippet">'+esc(f.snippet)+'</div>':'')+
     '</div>'+
+    '<div class="col-size">'+fmtSize(f.size)+'</div>'+
+    '<div class="col-date">'+when+'</div>'+
     '<div class="file-actions">'+
-      (canOpen ? '<button class="view-btn" title="Preview">&#x25B7; <span class="btn-lbl">view</span></button><div class="action-sep"></div>' : '')+
-      '<button class="dl-btn" title="Download">&#x2193; <span class="btn-lbl">dl</span></button>'+
-      '<button class="menu-btn" title="Options">&#x22EE;</button>'+
+      (canOpen ? '<button class="act view-btn" title="Preview" aria-label="Preview">'+SVG.eye+'</button>' : '')+
+      '<button class="act dl-btn" title="Download" aria-label="Download">'+SVG.dl+'</button>'+
+      '<button class="act menu-btn" title="More" aria-label="More actions">'+SVG.more+'</button>'+
     '</div>';
   if (selectMode) {
     var cb = el.querySelector('input[type=checkbox]');
@@ -2967,7 +3483,7 @@ function playViaRemux(path) {
   function fail(m) {
     if (remuxPoll) { clearInterval(remuxPoll); remuxPoll = null; }
     mContent.innerHTML = '<div class="prep"><div class="prep-msg">' + esc(m) + '</div>' +
-      '<div class="prep-sub">// use Download, or open it in a video app</div></div>';
+      '<div class="prep-sub">Use Download, or open it in a video app</div></div>';
   }
   function play(d) {
     if (remuxPoll) { clearInterval(remuxPoll); remuxPoll = null; }
@@ -2992,7 +3508,7 @@ function playViaRemux(path) {
           slowShown = true;
           mContent.innerHTML = '<div class="prep"><div class="prep-spin"></div>' +
             '<div class="prep-msg">Converting for playback...</div>' +
-            '<div class="prep-sub">// this format needs re-encoding, it can take a few minutes</div></div>';
+            '<div class="prep-sub">This format needs re-encoding, which can take a few minutes</div></div>';
         }
       })
       .catch(function(){ fail('conversion request failed'); });
@@ -3024,22 +3540,6 @@ document.addEventListener('keydown',function(e){ if(e.key==='Escape') closeModal
 // request and caches, so a broken/absent thumbnail just falls back to the label.
 var thumbExts = ['mkv','mp4','webm','mov','m4v','avi','wmv','flv','ts','m2ts','mpg','mpeg'];
 
-function thumb(name,ext,path){
-  if (['jpg','jpeg','png','gif','webp','svg'].indexOf(ext)!==-1)
-    return '<img src="/file?name='+encodeURIComponent(path)+'" alt="" loading="lazy">';
-  if (VIDEO_TOOLS && thumbExts.indexOf(ext)!==-1)
-    return '<img class="vid-thumb" src="/thumb?name='+encodeURIComponent(path)+'" alt="" loading="lazy"'+
-           ' onerror="this.parentNode.classList.add(\'ft-vid\');this.remove();">';
-  return esc((ext||'?').toUpperCase().slice(0,4));
-}
-function thumbCls(ext){
-  if (['jpg','jpeg','png','gif','webp','svg'].indexOf(ext)!==-1) return '';
-  if (ext==='pdf') return 'ft-pdf';
-  if (['mp4','webm','mov','m4v','ogg'].indexOf(ext)!==-1) return 'ft-vid';
-  if (['mp3','wav','flac','aac','m4a','opus'].indexOf(ext)!==-1) return 'ft-aud';
-  if (['zip','rar','7z','tar','gz','bz2'].indexOf(ext)!==-1) return 'ft-arc';
-  return 'ft-file';
-}
 function fileType(ext){
   if (['jpg','jpeg','png','gif','webp','svg','bmp','tiff'].indexOf(ext)!==-1) return 'Image';
   if (['mp4','webm','mov','avi','mkv','m4v'].indexOf(ext)!==-1) return 'Video';
@@ -3082,52 +3582,355 @@ function esc(s){
   return String(s).replace(/&/g,'&amp;').replace(/</g,'&lt;').replace(/>/g,'&gt;').replace(/"/g,'&quot;');
 }
 
-// ── Search ────────────────────────────────────────────────────────────────────
+// ── Search & command bar ──────────────────────────────────────────────────────
+// Search spans the whole tree and returns paths relative to the root, so while
+// it is active the root is the working folder; the folder you searched from is
+// restored when the search is cleared.
 var searchInput = document.getElementById('search-input');
 var searchClear = document.getElementById('search-clear');
+var cmdMenu = document.getElementById('cmd-menu');
 var searchTimer = null;
+var searchHome = null;
+var cmdIndex = -1;
+
+function beginSearchScope() { if (searchHome === null) { searchHome = currentPath; currentPath = ''; } }
+function endSearchScope() { if (searchHome !== null) { currentPath = searchHome; searchHome = null; } }
+
+function clearSearch() {
+  clearTimeout(searchTimer);
+  var had = !!searchInput.value;
+  searchInput.value = '';
+  searchClear.style.display = 'none';
+  endSearchScope();
+  if (had) renderBreadcrumb();
+}
 
 searchInput.addEventListener('input', function() {
   var q = this.value.trim();
   searchClear.style.display = q ? '' : 'none';
+  cmdIndex = -1;
+  renderCmdMenu();
   clearTimeout(searchTimer);
   searchTimer = setTimeout(function() {
-    if (q) { loadSearch(q); } else { loadFiles(); }
+    if (q) { beginSearchScope(); loadSearch(q); }
+    else { endSearchScope(); renderBreadcrumb(); loadFiles(); }
   }, 300);
 });
 
 searchClear.addEventListener('click', function() {
-  searchInput.value = '';
-  searchClear.style.display = 'none';
+  clearSearch();
   loadFiles();
+  searchInput.focus();
 });
 
 function loadSearch(q) {
   fetch('/search?q='+encodeURIComponent(q))
     .then(function(r){return r.json();})
     .then(function(files){
+      if (searchInput.value.trim() !== q) return;   // typed on since
       currentFiles = files || [];
       renderSearchList(currentFiles, q);
     })
-    .catch(function(){ list.innerHTML='<div class="empty-state">// search error</div>'; });
+    .catch(function(){ list.innerHTML='<div class="empty-state"><b>Search failed</b>Try again in a moment</div>'; });
 }
 
+var CMD_ICON = {
+  upload: svgIcon('<path d="M12 19V7"/><path d="M6.5 12.5L12 7l5.5 5.5"/><path d="M5 4h14"/>'),
+  folder: svgIcon('<path d="M3 7.5A2.5 2.5 0 0 1 5.5 5h3.6l2 2.2h7.4A2.5 2.5 0 0 1 21 9.7v7.8a2.5 2.5 0 0 1-2.5 2.5h-13A2.5 2.5 0 0 1 3 17.5z"/><path d="M12 11v5"/><path d="M9.5 13.5h5"/>'),
+  note: svgIcon('<path d="M4 6.5A2.5 2.5 0 0 1 6.5 4h11A2.5 2.5 0 0 1 20 6.5V15l-5 5H6.5A2.5 2.5 0 0 1 4 17.5z"/><path d="M8 9h8"/><path d="M8 12.5h5"/>'),
+  share: svgIcon('<circle cx="18" cy="5.5" r="2.5"/><circle cx="6" cy="12" r="2.5"/><circle cx="18" cy="18.5" r="2.5"/><path d="M8.2 10.8l7.6-4"/><path d="M8.2 13.2l7.6 4"/>'),
+  select: svgIcon('<rect x="4" y="4" width="16" height="16" rx="4"/><path d="M8.5 12l2.5 2.5 4.5-5"/>'),
+  grid: svgIcon('<rect x="4" y="4" width="6.5" height="6.5" rx="1.6"/><rect x="13.5" y="4" width="6.5" height="6.5" rx="1.6"/><rect x="4" y="13.5" width="6.5" height="6.5" rx="1.6"/><rect x="13.5" y="13.5" width="6.5" height="6.5" rx="1.6"/>'),
+  list: svgIcon('<path d="M9 6h11"/><path d="M9 12h11"/><path d="M9 18h11"/><path d="M4.5 6h.01"/><path d="M4.5 12h.01"/><path d="M4.5 18h.01"/>'),
+  theme: svgIcon('<path d="M20 14.5A8 8 0 0 1 9.5 4a8 8 0 1 0 10.5 10.5z"/>'),
+  phone: svgIcon('<rect x="6.5" y="2.5" width="11" height="19" rx="2.5"/><path d="M11 18h2"/>'),
+  gear: svgIcon('<circle cx="12" cy="12" r="3"/><path d="M12 2.5v3"/><path d="M12 18.5v3"/><path d="M2.5 12h3"/><path d="M18.5 12h3"/><path d="M5.3 5.3l2.1 2.1"/><path d="M16.6 16.6l2.1 2.1"/><path d="M5.3 18.7l2.1-2.1"/><path d="M16.6 7.4l2.1-2.1"/>')
+};
+var COMMANDS = [
+  {label:'Upload files', icon:'upload', owner:true, run:function(){ fi.click(); }},
+  {label:'Upload a folder', icon:'upload', owner:true, run:function(){ folderInput.click(); }},
+  {label:'New note', icon:'note', owner:true, run:function(){ openNote(); }},
+  {label:'New folder', icon:'folder', owner:true, run:function(){ openNewFolder(); }},
+  {label:'Share a new folder', icon:'share', owner:true, run:function(){ startShare(); }},
+  {label:'Select items', icon:'select', owner:true, run:function(){ if (!selectMode) enterSelectMode(); }},
+  {label:'Grid view', icon:'grid', run:function(){ setView('grid'); }},
+  {label:'List view', icon:'list', run:function(){ setView('list'); }},
+  {label:'Switch light / dark', icon:'theme', run:function(){ toggleTheme(); }},
+  {label:'Open on your phone', icon:'phone', owner:true, run:function(){ openQr(); }},
+  {label:'Settings', icon:'gear', run:function(){ openSettings(); }}
+];
 
-// A share visitor may only look: hide everything that writes, so the UI matches
-// what the server will actually allow.
-if (SHARE_MODE) {
-  document.body.classList.add('share-view');
-  var up = document.querySelector('.upload-section');
-  if (up) up.style.display = 'none';
-  var st = document.getElementById('select-trigger');
-  if (st) st.style.display = 'none';
-  var nf = document.getElementById('newfolder-btn');
-  if (nf) nf.style.display = 'none';
-  var sb = document.getElementById("share-btn");
-  if (sb) sb.style.display = "none";
-  var nfield = document.querySelector('.note-field');
-  if (nfield) nfield.style.display = 'none';
+function matchingCommands() {
+  var q = searchInput.value.trim().toLowerCase();
+  return COMMANDS.filter(function(c){
+    if (c.owner && SHARE_MODE) return false;
+    return !q || c.label.toLowerCase().indexOf(q) !== -1;
+  });
 }
+
+function renderCmdMenu() {
+  if (document.activeElement !== searchInput) { cmdMenu.classList.remove('open'); return; }
+  var cmds = matchingCommands();
+  if (!cmds.length) { cmdMenu.classList.remove('open'); return; }
+  if (cmdIndex >= cmds.length) cmdIndex = cmds.length - 1;
+  var html = '<div class="cmd-head">' + (searchInput.value.trim() ? 'Actions' : 'Actions — or type to search files') + '</div>';
+  cmds.forEach(function(c, i){
+    html += '<button class="cmd-item' + (i === cmdIndex ? ' on' : '') + '" data-i="' + i + '" role="option">' +
+            CMD_ICON[c.icon] + esc(c.label) + '</button>';
+  });
+  cmdMenu.innerHTML = html;
+  cmdMenu.classList.add('open');
+  cmdMenu.querySelectorAll('[data-i]').forEach(function(b){
+    // mousedown so it fires before the input loses focus and hides the menu
+    b.addEventListener('mousedown', function(e){ e.preventDefault(); runCmd(cmds[+b.getAttribute('data-i')]); });
+  });
+}
+
+function runCmd(c) {
+  var wasSearching = !!searchInput.value.trim();
+  clearSearch();
+  if (wasSearching) loadFiles();
+  cmdMenu.classList.remove('open');
+  searchInput.blur();
+  closeSearchUI();
+  c.run();
+}
+
+function openSearch() {
+  document.body.classList.add('search-open');
+  searchInput.focus();
+  renderCmdMenu();
+}
+function closeSearchUI() {
+  document.body.classList.remove('search-open');
+  cmdMenu.classList.remove('open');
+}
+
+searchInput.addEventListener('focus', function(){ cmdIndex = -1; renderCmdMenu(); });
+searchInput.addEventListener('blur', function(){ setTimeout(function(){ cmdMenu.classList.remove('open'); }, 120); });
+searchInput.addEventListener('keydown', function(e){
+  var cmds = matchingCommands();
+  if (e.key === 'ArrowDown' && cmds.length) { e.preventDefault(); cmdIndex = (cmdIndex + 1) % cmds.length; renderCmdMenu(); }
+  else if (e.key === 'ArrowUp' && cmds.length) { e.preventDefault(); cmdIndex = cmdIndex <= 0 ? cmds.length - 1 : cmdIndex - 1; renderCmdMenu(); }
+  else if (e.key === 'Enter') {
+    e.preventDefault();
+    if (cmdIndex >= 0 && cmds[cmdIndex]) { runCmd(cmds[cmdIndex]); return; }
+    cmdMenu.classList.remove('open');
+    var q = searchInput.value.trim();
+    if (q) { clearTimeout(searchTimer); beginSearchScope(); loadSearch(q); }
+  }
+  else if (e.key === 'Escape') {
+    e.stopPropagation();
+    if (cmdMenu.classList.contains('open')) { cmdMenu.classList.remove('open'); return; }
+    if (searchInput.value) { clearSearch(); loadFiles(); return; }
+    searchInput.blur();
+    closeSearchUI();
+  }
+});
+document.getElementById('search-close').addEventListener('click', function(){
+  if (searchInput.value) { clearSearch(); loadFiles(); }
+  closeSearchUI();
+});
+document.getElementById('bb-search').addEventListener('click', openSearch);
+document.addEventListener('keydown', function(e){
+  if ((e.ctrlKey || e.metaKey) && (e.key === 'k' || e.key === 'K')) { e.preventDefault(); openSearch(); }
+});
+
+// ── Phone QR ──────────────────────────────────────────────────────────────────
+// The server encodes its LAN address, so the code works even when this page is
+// open on localhost.
+var qrModal = document.getElementById('qr-modal');
+function openQr() {
+  document.getElementById('qr-img').src = '/qr.png?lan=1&t=' + Date.now();
+  document.getElementById('qr-url').textContent = LAN_URL || (location.origin + '/');
+  qrModal.classList.add('open');
+}
+function closeQr() { qrModal.classList.remove('open'); }
+document.getElementById('qr-btn').addEventListener('click', openQr);
+qrModal.addEventListener('click', function(e){ if (e.target === qrModal) closeQr(); });
+
+// ── Settings panel ────────────────────────────────────────────────────────────
+var settingsModal = document.getElementById('settings-modal');
+var settingsBody = document.getElementById('settings-body');
+var serverInfo = null;
+
+function openSettings() {
+  closeMenu();
+  closeDrawer();
+  serverInfo = null;
+  renderSettings();
+  settingsModal.classList.add('open');
+  if (PRIVATE_SERVER && !SHARE_MODE) loadServerInfo();
+}
+function closeSettings() { settingsModal.classList.remove('open'); }
+document.getElementById('settings-btn').addEventListener('click', openSettings);
+settingsModal.addEventListener('click', function(e){ if (e.target === settingsModal) closeSettings(); });
+
+function loadServerInfo() {
+  fetch('/settings-info').then(function(r){ return r.ok ? r.json() : null; })
+    .then(function(d){ serverInfo = d; if (settingsModal.classList.contains('open')) renderSettings(); })
+    .catch(function(){});
+}
+
+function segCtl(key, opts) {
+  return '<div class="seg" data-key="' + key + '">' + opts.map(function(o){
+    return '<button data-val="' + o[0] + '"' + (String(settings[key]) === String(o[0]) ? ' class="on"' : '') + '>' + o[1] + '</button>';
+  }).join('') + '</div>';
+}
+function switchCtl(key, on, extra) {
+  return '<button class="switch" role="switch" aria-checked="' + (on ? 'true' : 'false') + '" data-switch="' + key + '"' + (extra || '') + '></button>';
+}
+function setRow(label, desc, ctl, cls) {
+  return '<div class="set-row' + (cls ? ' ' + cls : '') + '"><div><div class="set-label">' + label + '</div>' +
+         (desc ? '<div class="set-desc">' + desc + '</div>' : '') + '</div>' + ctl + '</div>';
+}
+
+var ACCENT_SWATCHES = [
+  ['ultramarine', 'Ultramarine', '#2f3fd6'], ['cobalt', 'Cobalt', '#1f4fff'],
+  ['steel', 'Steel', '#3d6a9e'], ['original', 'Classic blue', '#2563eb']
+];
+
+function renderSettings() {
+  var h = '';
+  h += '<div class="set-group"><div class="set-group-title">Appearance</div>';
+  h += setRow('Theme', 'System follows your device', segCtl('theme', [['light','Light'],['dark','Dark'],['system','System']]));
+  h += setRow('Accent color', 'Buttons, selection and the active folder',
+    '<div class="swatches">' + ACCENT_SWATCHES.map(function(s){
+      return '<button class="swatch' + (settings.accent === s[0] ? ' on' : '') + '" data-accent="' + s[0] + '" title="' + s[1] +
+             '" aria-label="' + s[1] + '" style="background:' + s[2] + ';--sw:' + s[2] + '"></button>';
+    }).join('') + '</div>');
+  h += setRow('Tinted backgrounds', 'Mix a hint of the accent into the greys', switchCtl('tint', settings.tint));
+  h += setRow('Density', '', segCtl('density', [['comfortable','Comfortable'],['compact','Compact']]));
+  h += setRow('Default view', '', segCtl('view', [['list','List'],['grid','Grid']]));
+  h += setRow('Remember view per folder', 'Each folder keeps the last view you picked', switchCtl('viewPerFolder', settings.viewPerFolder));
+  h += '</div>';
+
+  h += '<div class="set-group"><div class="set-group-title">Files</div>';
+  h += setRow('Sort by', 'Pinned items always stay on top', segCtl('sort', [['recent','Recent'],['name','Name'],['size','Size'],['type','Type']]));
+  h += setRow('Show file extensions', '', switchCtl('showExt', settings.showExt));
+  h += setRow('Confirm before deleting', '', switchCtl('confirmDelete', settings.confirmDelete));
+  h += '</div>';
+
+  if (PRIVATE_SERVER && !SHARE_MODE) {
+    h += '<div class="set-group"><div class="set-group-title">Server</div>';
+    if (!serverInfo) {
+      h += '<div class="set-row"><div class="set-desc">Loading…</div></div>';
+    } else {
+      var si = serverInfo;
+      h += setRow('Login page', si.login_disabled
+          ? 'Off: only devices already signed in can open FileDrop'
+          : 'On: new devices can sign in with the password',
+        switchCtl('login', !si.login_disabled, ' data-server="1"'));
+      if (si.public_configured) {
+        h += setRow('Public login page', si.public_login_disabled ? 'Off for the public server' : 'On for the public server',
+          switchCtl('public_login', !si.public_login_disabled, ' data-server="1"'));
+      }
+      h += setRow('Media cache', 'Thumbnails and converted videos · ' + fmtSize(si.cache_bytes || 0) +
+          '<div class="set-path">' + esc(si.cache_dir || '') + '</div>',
+        '<div style="display:flex;gap:8px;align-items:center">' +
+          '<select class="set-select" id="set-prune" aria-label="Remove cache entries unwatched for">' +
+          [3, 7, 14, 30].map(function(n){ return '<option value="' + n + '"' + (si.prune_days === n ? ' selected' : '') + '>' + n + ' days</option>'; }).join('') +
+          '</select><button class="folder-btn" id="set-clear-cache">Clear now</button></div>');
+      h += '<div class="set-row set-col"><div><div class="set-label">Locked items</div><div class="set-desc">Removing a lock asks for its password</div></div>' +
+           '<div class="set-list">' + (si.locks && si.locks.length ? si.locks.map(function(p, i){
+             return '<div class="set-item"><span class="nm" title="' + esc(p) + '">' + esc(p) + '</span><button class="folder-btn" data-unlock="' + i + '">Remove lock</button></div>';
+           }).join('') : '<div class="set-desc">No locked items</div>') + '</div></div>';
+      h += '<div class="set-row set-col"><div><div class="set-label">Shared folders</div><div class="set-desc">Anyone with a link can open that folder</div></div>' +
+           '<div class="set-list">' + (si.shares && si.shares.length ? si.shares.map(function(s, i){
+             return '<div class="set-item"><span class="nm" title="' + esc(s.url) + '">' + esc(s.path) + '</span>' +
+                    '<button class="folder-btn" data-copyshare="' + i + '">Copy link</button>' +
+                    '<button class="folder-btn danger" data-unshare="' + i + '">Stop</button></div>';
+           }).join('') : '<div class="set-desc">No shared folders</div>') + '</div></div>';
+    }
+    h += '</div>';
+  }
+  settingsBody.innerHTML = h;
+  bindSettings();
+}
+
+function bindSettings() {
+  settingsBody.querySelectorAll('.seg[data-key] button').forEach(function(b){
+    b.addEventListener('click', function(){
+      setSetting(b.parentNode.getAttribute('data-key'), b.getAttribute('data-val'));
+      renderSettings();
+    });
+  });
+  settingsBody.querySelectorAll('[data-accent]').forEach(function(b){
+    b.addEventListener('click', function(){ setSetting('accent', b.getAttribute('data-accent')); renderSettings(); });
+  });
+  settingsBody.querySelectorAll('[data-switch]').forEach(function(b){
+    b.addEventListener('click', function(){
+      var key = b.getAttribute('data-switch');
+      if (b.hasAttribute('data-server')) { toggleServerLogin(key === 'login' ? 'private' : 'public'); return; }
+      setSetting(key, !settings[key]);
+      renderSettings();
+    });
+  });
+  var prune = document.getElementById('set-prune');
+  if (prune) prune.addEventListener('change', function(){
+    fetch('/settings?prune_days=' + encodeURIComponent(prune.value), {method:'POST'})
+      .then(function(r){ if (!r.ok) throw new Error(); msg.className = 'ok'; msg.textContent = 'Cache cleanup set to ' + prune.value + ' days'; loadServerInfo(); })
+      .catch(function(){ msg.className = 'err'; msg.textContent = 'Could not save that setting'; });
+  });
+  var clr = document.getElementById('set-clear-cache');
+  if (clr) clr.addEventListener('click', function(){
+    clr.disabled = true;
+    fetch('/cache-clear', {method:'POST'})
+      .then(function(r){ if (!r.ok) throw new Error(); msg.className = 'ok'; msg.textContent = 'Media cache cleared'; loadServerInfo(); })
+      .catch(function(){ clr.disabled = false; msg.className = 'err'; msg.textContent = 'Could not clear the cache'; });
+  });
+  settingsBody.querySelectorAll('[data-unlock]').forEach(function(b){
+    b.addEventListener('click', function(){
+      var p = serverInfo.locks[+b.getAttribute('data-unlock')];
+      askPassword('Remove lock', p, 'Remove', function(pw){
+        fetch('/remove-lock?name=' + encodeURIComponent(p), {method:'POST', body:pw})
+          .then(function(r){
+            if (r.ok) { closePw(); msg.className = 'ok'; msg.textContent = 'Lock removed'; loadServerInfo(); loadFiles(); return; }
+            r.text().then(function(t){ pwError(t.trim() || 'incorrect password'); });
+          })
+          .catch(function(){ pwError('network error'); });
+      });
+    });
+  });
+  settingsBody.querySelectorAll('[data-copyshare]').forEach(function(b){
+    b.addEventListener('click', function(){ copyText(serverInfo.shares[+b.getAttribute('data-copyshare')].url, b, 'Copy link'); });
+  });
+  settingsBody.querySelectorAll('[data-unshare]').forEach(function(b){
+    b.addEventListener('click', function(){
+      var s = serverInfo.shares[+b.getAttribute('data-unshare')];
+      fetch('/unshare?name=' + encodeURIComponent(s.path), {method:'POST'})
+        .then(function(r){ if (!r.ok) throw new Error(); msg.className = 'ok'; msg.textContent = 'Stopped sharing ' + s.path.split('/').pop(); loadServerInfo(); renderShareBanner(); })
+        .catch(function(){ msg.className = 'err'; msg.textContent = 'Could not stop sharing'; });
+    });
+  });
+}
+
+function toggleServerLogin(target) {
+  fetch('/toggle-login?target=' + target, {method:'POST'})
+    .then(function(r){ if (!r.ok) throw new Error(); return r.json(); })
+    .then(function(){ loadServerInfo(); })
+    .catch(function(){ msg.className = 'err'; msg.textContent = 'Could not change the login setting'; });
+}
+
+document.addEventListener('keydown', function(e){
+  if (e.key !== 'Escape') return;
+  if (settingsModal.classList.contains('open')) closeSettings();
+  if (qrModal.classList.contains('open')) closeQr();
+  closeDrawer();
+});
+
+// ── Start ─────────────────────────────────────────────────────────────────────
+// A share visitor may only look: everything that writes is hidden (.owner-only),
+// so the UI matches what the server will actually allow.
+if (SHARE_MODE) document.body.classList.add('share-view');
+if (!PRIVATE_SERVER) {
+  document.getElementById('pin-section').classList.add('hidden');
+  document.getElementById('pin-strip').classList.add('hidden');
+}
+renderBreadcrumb();
+revealInTree('');
+renderTree();
+applyView();
 loadFiles();
 loadDisk();
 var lastFilesJSON = '';
@@ -3144,6 +3947,7 @@ setInterval(function(){
       lastFilesJSON = json;
       currentFiles = files || [];
       renderList(currentFiles);
+      if (setTreeKids(forPath, currentFiles)) renderTree();
     }
   }).catch(function(){});
 }, 5000);
@@ -3670,6 +4474,303 @@ func dropLock(rel string) {
 		go saveLocks()
 	}
 }
+
+// ─── Pins ─────────────────────────────────────────────────────────────────────
+// A pin just hoists an item to the top of its folder's listing, in place of the
+// old unconditional "folders first" rule — no password, no visibility change.
+// Persisted the same way locks are, in its own file beside config.json.
+
+var (
+	pinsMu sync.RWMutex
+	pins   = map[string]bool{}
+)
+
+func pinsPath() string { return filepath.Join(filepath.Dir(cfgPath), "pins.json") }
+
+func loadPins() {
+	data, err := os.ReadFile(pinsPath())
+	if err != nil {
+		return
+	}
+	pinsMu.Lock()
+	defer pinsMu.Unlock()
+	if err := json.Unmarshal(data, &pins); err != nil {
+		logger.Printf("pins.json: %v", err)
+		pins = map[string]bool{}
+	}
+}
+
+func savePins() error {
+	pinsMu.RLock()
+	data, err := json.MarshalIndent(pins, "", "  ")
+	pinsMu.RUnlock()
+	if err != nil {
+		return err
+	}
+	return os.WriteFile(pinsPath(), data, 0600)
+}
+
+func (c *serverCtx) handlePin(w http.ResponseWriter, r *http.Request)   { c.setPin(w, r, true) }
+func (c *serverCtx) handleUnpin(w http.ResponseWriter, r *http.Request) { c.setPin(w, r, false) }
+
+func (c *serverCtx) setPin(w http.ResponseWriter, r *http.Request, pinned bool) {
+	if !c.isAuthed(r) {
+		http.Error(w, "unauthorized", http.StatusUnauthorized)
+		return
+	}
+	if r.Method != http.MethodPost {
+		http.Error(w, "method not allowed", http.StatusMethodNotAllowed)
+		return
+	}
+	if c.r2 != nil {
+		http.Error(w, "pinning is not available on this server", http.StatusNotFound)
+		return
+	}
+	name := r.URL.Query().Get("name")
+	if name == "" {
+		http.Error(w, "missing name", http.StatusBadRequest)
+		return
+	}
+	if c.blockedByLock(r, name) {
+		http.Error(w, "this item is locked", http.StatusForbidden)
+		return
+	}
+	key := normLock(name)
+	pinsMu.Lock()
+	if pinned {
+		pins[key] = true
+	} else {
+		delete(pins, key)
+	}
+	pinsMu.Unlock()
+	if err := savePins(); err != nil {
+		logger.Printf("savePins: %v", err)
+	}
+	w.WriteHeader(http.StatusOK)
+	fmt.Fprint(w, "ok")
+}
+
+// repinOnRename keeps a pin attached to its item when it is moved or renamed.
+func repinOnRename(oldRel, newRel string) {
+	oldKey, newKey := normLock(oldRel), normLock(newRel)
+	pinsMu.Lock()
+	defer pinsMu.Unlock()
+	if pins[oldKey] {
+		delete(pins, oldKey)
+		pins[newKey] = true
+		go savePins()
+	}
+}
+
+// dropPin forgets a pin whose item no longer exists.
+func dropPin(rel string) {
+	key := normLock(rel)
+	pinsMu.Lock()
+	_, ok := pins[key]
+	if ok {
+		delete(pins, key)
+	}
+	pinsMu.Unlock()
+	if ok {
+		go savePins()
+	}
+}
+
+// handlePins lists every pin that still exists and is not hidden by a lock, for
+// the sidebar's Pinned section.
+func (c *serverCtx) handlePins(w http.ResponseWriter, r *http.Request) {
+	if !c.isAuthed(r) || c.r2 != nil {
+		http.Error(w, "unauthorized", http.StatusUnauthorized)
+		return
+	}
+	type pinOut struct {
+		Path   string `json:"path"`
+		IsDir  bool   `json:"is_dir"`
+		IsNote bool   `json:"is_note"`
+	}
+	pinsMu.RLock()
+	keys := make([]string, 0, len(pins))
+	for k := range pins {
+		keys = append(keys, k)
+	}
+	pinsMu.RUnlock()
+	out := []pinOut{}
+	for _, k := range keys {
+		full, ok := safeSubpath(c.rootDir, k)
+		if !ok || c.blockedByLock(r, k) {
+			continue
+		}
+		fi, err := os.Stat(full)
+		if err != nil {
+			continue
+		}
+		// pins are stored lower-cased; report the name as it is on disk
+		rel, err := filepath.Rel(c.rootDir, full)
+		if err != nil {
+			continue
+		}
+		if real, err := filepath.EvalSymlinks(full); err == nil {
+			if realRel, err := filepath.Rel(c.rootDir, real); err == nil && !strings.HasPrefix(realRel, "..") {
+				rel = realRel
+			}
+		}
+		name := filepath.Base(rel)
+		out = append(out, pinOut{
+			Path:   filepath.ToSlash(rel),
+			IsDir:  fi.IsDir(),
+			IsNote: strings.HasPrefix(name, "note_") && strings.HasSuffix(name, ".txt"),
+		})
+	}
+	sort.Slice(out, func(i, j int) bool {
+		if out[i].IsDir != out[j].IsDir {
+			return out[i].IsDir
+		}
+		return strings.ToLower(out[i].Path) < strings.ToLower(out[j].Path)
+	})
+	w.Header().Set("Content-Type", "application/json")
+	json.NewEncoder(w).Encode(out)
+}
+
+func dirSize(root string) int64 {
+	var n int64
+	filepath.Walk(root, func(_ string, fi os.FileInfo, err error) error {
+		if err == nil && !fi.IsDir() {
+			n += fi.Size()
+		}
+		return nil
+	})
+	return n
+}
+
+// handleSettingsInfo gathers the server-side settings for the settings panel.
+func (c *serverCtx) handleSettingsInfo(w http.ResponseWriter, r *http.Request) {
+	if !c.isAuthed(r) {
+		http.Error(w, "unauthorized", http.StatusUnauthorized)
+		return
+	}
+	locksMu.RLock()
+	lockList := make([]string, 0, len(locks))
+	for k := range locks {
+		lockList = append(lockList, k)
+	}
+	locksMu.RUnlock()
+	sort.Strings(lockList)
+
+	type shareOut struct {
+		Path string `json:"path"`
+		URL  string `json:"url"`
+	}
+	sharesMu.RLock()
+	shareList := make([]shareOut, 0, len(shares))
+	for tok, s := range shares {
+		shareList = append(shareList, shareOut{Path: s.Path, URL: shareURL(r, tok)})
+	}
+	sharesMu.RUnlock()
+	sort.Slice(shareList, func(i, j int) bool { return strings.ToLower(shareList[i].Path) < strings.ToLower(shareList[j].Path) })
+
+	info := map[string]interface{}{
+		"login_disabled":        c.loginDisabled.Load(),
+		"public_configured":     pubSrv != nil,
+		"public_login_disabled": pubSrv != nil && pubSrv.loginDisabled.Load(),
+		"cache_dir":             cacheRoot(),
+		"cache_bytes":           dirSize(cacheRoot()),
+		"prune_days":            pruneDays(),
+		"locks":                 lockList,
+		"shares":                shareList,
+	}
+	w.Header().Set("Content-Type", "application/json")
+	json.NewEncoder(w).Encode(info)
+}
+
+// handleSettings saves server-side settings sent from the settings panel.
+func (c *serverCtx) handleSettings(w http.ResponseWriter, r *http.Request) {
+	if !c.isAuthed(r) {
+		http.Error(w, "unauthorized", http.StatusUnauthorized)
+		return
+	}
+	if r.Method != http.MethodPost {
+		http.Error(w, "method not allowed", http.StatusMethodNotAllowed)
+		return
+	}
+	if v := r.URL.Query().Get("prune_days"); v != "" {
+		n, err := strconv.Atoi(v)
+		if err != nil || n < 1 || n > 365 {
+			http.Error(w, "prune_days must be 1–365", http.StatusBadRequest)
+			return
+		}
+		cfg.CachePruneDays = n
+	}
+	if err := saveConfig(); err != nil {
+		logger.Printf("settings save error: %v", err)
+		http.Error(w, "could not save settings", http.StatusInternalServerError)
+		return
+	}
+	w.WriteHeader(http.StatusOK)
+	fmt.Fprint(w, "ok")
+}
+
+// handleCacheClear empties the media cache. Everything in it is regenerated on
+// demand, so this only costs re-conversion time.
+func (c *serverCtx) handleCacheClear(w http.ResponseWriter, r *http.Request) {
+	if !c.isAuthed(r) {
+		http.Error(w, "unauthorized", http.StatusUnauthorized)
+		return
+	}
+	if r.Method != http.MethodPost {
+		http.Error(w, "method not allowed", http.StatusMethodNotAllowed)
+		return
+	}
+	for _, kind := range []string{"thumbs", "remux", "hls"} {
+		dir := mediaCacheDir(kind)
+		entries, err := os.ReadDir(dir)
+		if err != nil {
+			continue
+		}
+		for _, e := range entries {
+			// an in-progress HLS build writes into a .part folder; leave it be
+			if strings.HasSuffix(e.Name(), ".part") {
+				continue
+			}
+			os.RemoveAll(filepath.Join(dir, e.Name()))
+		}
+	}
+	logger.Printf("media cache cleared")
+	w.WriteHeader(http.StatusOK)
+	fmt.Fprint(w, "ok")
+}
+
+// applyPins hoists pinned entries to the front of a listing. It runs after
+// applyLocks, so a pin wins even over a locked item's placement — "pin it to
+// the top" is the strongest ordering signal in the list.
+func applyPins(c *serverCtx, r *http.Request, in []fileEntry) []fileEntry {
+	if c.r2 != nil {
+		return in // pinning is a private-server feature
+	}
+	pinsMu.RLock()
+	defer pinsMu.RUnlock()
+	if len(pins) == 0 {
+		return in
+	}
+	base := strings.Trim(filepath.ToSlash(r.URL.Query().Get("path")), "/")
+	if _, sharePath, ok := c.shareRoot(r); ok && !c.isAuthed(r) {
+		base = strings.Trim(strings.Trim(sharePath, "/")+"/"+base, "/")
+	}
+	var pinned, plain []fileEntry
+	for _, e := range in {
+		rel := e.Name
+		if base != "" {
+			rel = base + "/" + e.Name
+		}
+		if pins[normLock(rel)] {
+			e.Pinned = true
+			pinned = append(pinned, e)
+		} else {
+			plain = append(plain, e)
+		}
+	}
+	return append(pinned, plain...)
+}
+
 // ─── Media tools (ffmpeg) ─────────────────────────────────────────────────────
 // A browser cannot demux Matroska, but an .mkv holding H.264 video is already
 // playable — only the container is wrong. So the fix is to remux (stream-copy)
@@ -3733,8 +4834,22 @@ func resolveMediaTools() {
 	}
 }
 
+// cacheRoot keeps generated media out of the install folder. That folder is
+// usually the source checkout, and HLS segments are named *.ts — editors and
+// TypeScript tooling scanning the workspace would try to parse gigabytes of
+// video as code.
+func cacheRoot() string {
+	if cfg.CacheDir != "" {
+		return cfg.CacheDir
+	}
+	if pd := os.Getenv("ProgramData"); pd != "" {
+		return filepath.Join(pd, "filedrop", "media_cache")
+	}
+	return filepath.Join(filepath.Dir(cfgPath), "media_cache")
+}
+
 func mediaCacheDir(kind string) string {
-	dir := filepath.Join(filepath.Dir(cfgPath), "media_cache", kind)
+	dir := filepath.Join(cacheRoot(), kind)
 	os.MkdirAll(dir, 0755)
 	return dir
 }
@@ -3949,6 +5064,12 @@ func (c *serverCtx) handleHLS(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	full := filepath.Join(mediaCacheDir("hls"), key, file)
+	if file == "master.m3u8" {
+		// Serving never writes, so mtime alone can't tell the pruner a stream is
+		// still being watched — mark each playback start explicitly.
+		now := time.Now()
+		os.Chtimes(full, now, now)
+	}
 	if strings.HasSuffix(file, ".m3u8") {
 		w.Header().Set("Content-Type", "application/vnd.apple.mpegurl")
 	} else if strings.HasSuffix(file, ".ts") {
@@ -4188,21 +5309,48 @@ func (c *serverCtx) handleStream(w http.ResponseWriter, r *http.Request) {
 }
 
 // pruneMediaCache drops entries untouched for a week. A remuxed file is roughly
-// the size of its source, so the cache cannot be left to grow forever.
+// the size of its source and an HLS ladder can be several times it, so the
+// cache cannot be left to grow forever.
+func pruneDays() int {
+	if cfg.CachePruneDays > 0 {
+		return cfg.CachePruneDays
+	}
+	return 7
+}
+
 func pruneMediaCache() {
-	cutoff := time.Now().Add(-7 * 24 * time.Hour)
-	for _, kind := range []string{"thumbs", "remux"} {
+	cutoff := time.Now().Add(-time.Duration(pruneDays()) * 24 * time.Hour)
+	for _, kind := range []string{"thumbs", "remux", "hls"} {
 		dir := mediaCacheDir(kind)
 		entries, err := os.ReadDir(dir)
 		if err != nil {
 			continue
 		}
 		for _, e := range entries {
-			fi, err := e.Info()
+			p := filepath.Join(dir, e.Name())
+			// An HLS entry is a folder; its master playlist is touched on every
+			// playback, so that is the last-watched time. A stale .part folder
+			// (a crashed build) has no playlist and falls back to its own mtime.
+			stamp := p
+			if e.IsDir() {
+				if _, err := os.Stat(filepath.Join(p, "master.m3u8")); err == nil {
+					stamp = filepath.Join(p, "master.m3u8")
+				}
+			}
+			fi, err := os.Stat(stamp)
 			if err == nil && fi.ModTime().Before(cutoff) {
-				os.Remove(filepath.Join(dir, e.Name()))
+				os.RemoveAll(p)
 			}
 		}
+	}
+}
+
+// pruneMediaCacheLoop prunes at startup and then daily — the service can run
+// for months without a restart, so a startup-only pass never fires.
+func pruneMediaCacheLoop() {
+	for {
+		pruneMediaCache()
+		time.Sleep(24 * time.Hour)
 	}
 }
 
@@ -4335,7 +5483,24 @@ func (c *serverCtx) handleIndex(w http.ResponseWriter, r *http.Request) {
 		"ShareMode":   shareName != "",
 		"ShareName":   shareName,
 		"ShareLink":   shareLink,
+		"Private":     c.private,
+		"LanURL":      lanURL(c.port),
 	})
+}
+
+// lanURL is this machine's address on the local network, for the phone QR.
+// The page may be open on localhost, whose address a phone cannot reach.
+func lanURL(port int) string {
+	conn, err := net.Dial("udp", "192.0.2.1:9") // no packet is sent; this only picks the outbound interface
+	if err != nil {
+		return ""
+	}
+	defer conn.Close()
+	ip := conn.LocalAddr().(*net.UDPAddr).IP
+	if ip == nil || ip.IsLoopback() {
+		return ""
+	}
+	return fmt.Sprintf("http://%s:%d/", ip.String(), port)
 }
 
 func (c *serverCtx) handleUpload(w http.ResponseWriter, r *http.Request) {
@@ -4482,6 +5647,7 @@ type fileEntry struct {
 	MatchContent bool      `json:"match_content,omitempty"`
 	Locked       bool      `json:"locked,omitempty"`
 	Unlocked     bool      `json:"unlocked,omitempty"`
+	Pinned       bool      `json:"pinned,omitempty"`
 	Truncated    bool      `json:"truncated,omitempty"`
 }
 
@@ -4642,14 +5808,14 @@ func (c *serverCtx) handleFiles(w http.ResponseWriter, r *http.Request) {
 		logger.Printf("ERROR ReadDir %s: %v", dirPath, err)
 		return
 	}
-	var dirs, files []fileEntry
+	var all, files []fileEntry
 	for _, e := range entries {
 		fi, err := e.Info()
 		if err != nil {
 			continue
 		}
 		if e.IsDir() {
-			dirs = append(dirs, fileEntry{Name: e.Name(), Modified: fi.ModTime(), IsDir: true})
+			all = append(all, fileEntry{Name: e.Name(), Modified: fi.ModTime(), IsDir: true})
 			continue
 		}
 		if strings.HasSuffix(e.Name(), ".fdtmp") {
@@ -4672,9 +5838,11 @@ func (c *serverCtx) handleFiles(w http.ResponseWriter, r *http.Request) {
 		}
 		files = append(files, entry)
 	}
-	sort.Slice(dirs, func(i, j int) bool { return dirs[i].Name < dirs[j].Name })
-	sort.Slice(files, func(i, j int) bool { return files[i].Modified.After(files[j].Modified) })
-	result := applyLocks(c, r, append(dirs, files...))
+	all = append(all, files...)
+	// Folders no longer sort to the top automatically — everything is ordered
+	// by recency together, and pinning (applyPins) is how an item gets hoisted.
+	sort.Slice(all, func(i, j int) bool { return all[i].Modified.After(all[j].Modified) })
+	result := applyPins(c, r, applyLocks(c, r, all))
 	w.Header().Set("Content-Type", "application/json")
 	if err := json.NewEncoder(w).Encode(result); err != nil {
 		logger.Printf("ERROR encoding file list: %v", err)
@@ -5040,8 +6208,10 @@ func (c *serverCtx) handleMove(w http.ResponseWriter, r *http.Request) {
 		http.Error(w, "could not move", http.StatusInternalServerError)
 		return
 	}
-	// keep any lock attached to the item it belongs to
-	relockOnRename(name, strings.Trim(filepath.ToSlash(to), "/")+"/"+destName)
+	// keep any lock or pin attached to the item it belongs to
+	newRel := strings.Trim(filepath.ToSlash(to), "/") + "/" + destName
+	relockOnRename(name, newRel)
+	repinOnRename(name, newRel)
 	logger.Printf("moved: %s -> %s", srcPath, destPath)
 	w.WriteHeader(http.StatusOK)
 	fmt.Fprint(w, "ok")
@@ -5380,6 +6550,7 @@ func (c *serverCtx) handleDelete(w http.ResponseWriter, r *http.Request) {
 		removeMediaCache(t.path, t.fi)
 	}
 	dropLock(rawName)
+	dropPin(rawName)
 	logger.Printf("deleted: %s", fpath)
 	w.WriteHeader(http.StatusOK)
 	fmt.Fprint(w, "ok")
@@ -5476,7 +6647,11 @@ func (c *serverCtx) handleQR(w http.ResponseWriter, r *http.Request) {
 	// address. Restricted to our own scheme+host so it cannot be used to mint a
 	// QR pointing anywhere on the internet.
 	target := "http://" + host + "/"
-	if d := r.URL.Query().Get("data"); d != "" {
+	if r.URL.Query().Get("lan") == "1" {
+		if u := lanURL(c.port); u != "" {
+			target = u
+		}
+	} else if d := r.URL.Query().Get("data"); d != "" {
 		if u, err := url.Parse(d); err == nil && u.Host == host && (u.Scheme == "http" || u.Scheme == "https") {
 			target = d
 		}
@@ -5927,6 +7102,7 @@ func newServerCtxFromCfg() *serverCtx {
 		port:        cfg.Port,
 		exportDir:   cfg.ExportDir,
 		footerLabel: "LAN only",
+		private:     true,
 		loginLabel:  "Local Network · Private",
 		rateMap:     make(map[string]*rateEntry),
 	}
@@ -5966,6 +7142,12 @@ func buildServer() *http.Server {
 	mux.HandleFunc("/lock", c.handleLock)
 	mux.HandleFunc("/unlock", c.handleUnlock)
 	mux.HandleFunc("/remove-lock", c.handleRemoveLock)
+	mux.HandleFunc("/pin", c.handlePin)
+	mux.HandleFunc("/unpin", c.handleUnpin)
+	mux.HandleFunc("/pins", c.handlePins)
+	mux.HandleFunc("/settings-info", c.handleSettingsInfo)
+	mux.HandleFunc("/settings", c.handleSettings)
+	mux.HandleFunc("/cache-clear", c.handleCacheClear)
 	mux.HandleFunc("/move", c.handleMove)
 	mux.HandleFunc("/copy", c.handleCopy)
 	mux.HandleFunc("/file-token", c.handleFileToken)
@@ -6099,10 +7281,11 @@ func runAsService(exePath string) {
 		logger.Fatalf("cannot create upload dir %s: %v", cfg.UploadDir, err)
 	}
 	loadLocks()
+	loadPins()
 	loadShares()
 	resolveMediaTools()
 	nvencAvailable = probeNvenc()
-	go pruneMediaCache()
+	go pruneMediaCacheLoop()
 	if err := svc.Run(serviceName, &fileDropSvc{}); err != nil {
 		logger.Fatalf("svc.Run error: %v", err)
 	}
@@ -6322,10 +7505,11 @@ func main() {
 			log.Fatalf("cannot create upload dir: %v", err)
 		}
 		loadLocks()
+		loadPins()
 		loadShares()
 		resolveMediaTools()
 		nvencAvailable = probeNvenc()
-		go pruneMediaCache()
+		go pruneMediaCacheLoop()
 		pub := buildPublicServer()
 		if pub != nil {
 			go func() {
